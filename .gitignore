@@ -1,0 +1,14 @@
+# Python tự sinh
+__pycache__/
+*.pyc
+
+# Dữ liệu runtime (mỗi máy tự tạo, không sync)
+output/
+
+# Bí mật — mỗi máy có file riêng, KHÔNG đưa lên GitHub
+.env
+creds.json
+api_keys.json
+
+# Log tạm
+*.log
