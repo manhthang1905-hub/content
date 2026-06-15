@@ -562,7 +562,9 @@ class ContentApp(tk.Tk):
 
     def _restart(self) -> None:
         import subprocess as _sp
-        _sp.Popen([sys.executable, str(ROOT / "gui.py")])
+        pythonw = Path(sys.executable).parent / "pythonw.exe"
+        exe = str(pythonw) if pythonw.exists() else sys.executable
+        _sp.Popen([exe, str(ROOT / "gui.py")])
         self.destroy()
 
     def open_drive_config(self) -> None:
