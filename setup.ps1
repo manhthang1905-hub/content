@@ -84,6 +84,23 @@ if (-not (Test-Path $outputDir)) {
     Write-Host "  OK: output/ da ton tai" -ForegroundColor Green
 }
 
+# ------ 6. Tao shortcut CONTENT.lnk (chay khong co CMD) -------------------------------------------------------------------------------------------------
+Write-Host "`n[6] Tao shortcut..." -ForegroundColor Yellow
+try {
+    $pydir   = Split-Path (Get-Command python).Source
+    $pythonw = Join-Path $pydir "pythonw.exe"
+    $ws  = New-Object -ComObject WScript.Shell
+    $lnk = $ws.CreateShortcut("$ROOT\CONTENT.lnk")
+    $lnk.TargetPath       = $pythonw
+    $lnk.Arguments        = "`"$ROOT\gui.py`""
+    $lnk.WorkingDirectory = $ROOT
+    $lnk.IconLocation     = $pythonw
+    $lnk.Save()
+    Write-Host "  OK: CONTENT.lnk (double-click de mo)" -ForegroundColor Green
+} catch {
+    Write-Host "  CANH BAO: Khong tao duoc shortcut: $_" -ForegroundColor Yellow
+}
+
 # ------ Cau hinh API backend ----------------------------------------------------------------------------------------------------------------------------------
 Write-Host "`n[Extra] Cau hinh API backend..." -ForegroundColor Yellow
 Write-Host "  [1] Claude Code CLI (khuyen nghi - dung tai khoan Max 20x voi Opus 4.8)"
