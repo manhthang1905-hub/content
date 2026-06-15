@@ -154,6 +154,8 @@ class DriveConfigDialog(tk.Toplevel):
         self.resizable(False, False)
         self.transient(app)
         self.grab_set()
+        self.lift()
+        self.focus_force()
 
         tk.Label(self, text="Net use commands (1 lenh 1 dong):",
                  bg=TH["bg"], fg=TH["sub"], font=("Segoe UI Semibold", 9)).pack(anchor="w", padx=14, pady=(12, 4))
@@ -558,7 +560,10 @@ class ContentApp(tk.Tk):
         _t.Thread(target=worker, daemon=True).start()
 
     def open_drive_config(self) -> None:
-        DriveConfigDialog(self)
+        try:
+            DriveConfigDialog(self)
+        except Exception as exc:
+            self.log(f"[Drives] LOI mo dialog: {exc}")
 
     def change_backend(self) -> None:
         if self.auto_running:
