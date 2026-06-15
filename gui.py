@@ -515,11 +515,13 @@ class ContentApp(tk.Tk):
         import threading as _t
 
         def _via_git() -> str:
-            import subprocess as _sp
+            import shutil as _sh, subprocess as _sp
             _sp.run(["git", "--version"], capture_output=True, check=True, timeout=5)
             r = _sp.run(
                 ["git", "pull"], capture_output=True, text=True, cwd=str(ROOT), timeout=60,
             )
+            for cache in ROOT.rglob("__pycache__"):
+                _sh.rmtree(cache, ignore_errors=True)
             return (r.stdout or r.stderr or "").strip()
 
         def _via_zip() -> str:
@@ -544,6 +546,8 @@ class ContentApp(tk.Tk):
                         shutil.copytree(s, d)
                     else:
                         shutil.copy2(s, d)
+            for cache in ROOT.rglob("__pycache__"):
+                shutil.rmtree(cache, ignore_errors=True)
             return "Xong (ZIP). Khoi dong lai de ap dung."
 
         def worker():
