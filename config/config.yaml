@@ -1,0 +1,66 @@
+# ============================================================================
+#  CONTENT — Cấu hình chung (hard logic dùng cho mọi kênh)
+# ============================================================================
+
+# Topic active của MÁY này (mỗi máy chạy 1 topic, Sheet + creds riêng).
+# Đổi giá trị này khi copy tool sang máy topic khác (vd: tai-chinh, thu-cung...).
+active_topic: tam-ly
+
+# Bảng ngôn ngữ: số thứ tự T1..T10 (trong mã kênh TLx-Ty) → mã ngôn ngữ
+languages:
+  T1: es        # Tây Ban Nha
+  T2: vi        # Việt
+  T3: en        # Anh
+  T4: fr        # Pháp
+  T5: de        # Đức
+  T6: pt        # Bồ Đào Nha
+  T7: ja        # Nhật
+  T8: ko        # Hàn
+  T9: it        # Ý
+  T10: tr       # Thổ Nhĩ Kỳ
+
+# ── API backend ──────────────────────────────────────────────────────────────
+# http: dung routerapi (ANTHROPIC_API_KEY trong .env) — mac dinh
+# cli:  dung claude CLI (da dang nhap Max 20x) — chat luong cao hon voi Opus
+api_backend: cli
+cli_model: claude-opus-4-8
+
+# ── Model dùng cho từng bước ─────────────────────────────────────────────────
+models:
+  write: claude-sonnet-4-6
+  check: claude-sonnet-4-6
+
+# ── Network drives (ket noi lai tu dong neu mat) ─────────────────────────────
+# SMB_USER / SMB_PASS dat trong config/.env
+# De trong khi khong dung drive nao thi xoa section nay
+network_drives:
+  X: '\192.168.88.41\D'
+  Y: '\192.168.88.183\D'
+  Z: '\192.168.88.254\D'
+
+# ── Format đầu ra cho ElevenLabs ─────────────────────────────────────────────
+output:
+  blank_line_between_paragraphs: true
+  voice_dir: C:\Users\Administrator\Desktop\voice\voice
+
+# ── Google Sheet ─────────────────────────────────────────────────────────────
+sheet:
+  spreadsheet_name: KA
+  input_sheet: INPUT
+  nguon_sheet: NGUON
+  columns:
+    ma: 0
+    link: 1
+    title: 19
+    thumb: 20
+    channel: 34
+    seo: 35
+    content: 36
+    content2: 37
+    content3: 38
+  nguon_columns:
+    ma: 6
+    link: 1
+    title: 2
+    thumb: 3
+    hook: 4

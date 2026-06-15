@@ -1,0 +1,27 @@
+# CONTENT pipeline — Python dependencies
+# Cài bằng: pip install -r requirements.txt
+
+# Core HTTP / AI
+httpx>=0.28
+PyYAML>=6.0
+
+# Google Sheets
+gspread>=6.2
+google-auth>=2.47
+google-auth-oauthlib>=1.2
+
+# YouTube transcript (Method 1)
+requests>=2.32
+youtube-transcript-api==1.2.4
+
+# YouTube download (Method 2) — curl-cffi PHẢI đúng version
+yt-dlp>=2026.3.17
+curl-cffi==0.14.0
+
+# Whisper fallback (Method 3)
+openai-whisper
+torch
+numpy
+
+# GUI
+PyQt5

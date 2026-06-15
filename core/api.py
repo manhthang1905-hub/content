@@ -11,6 +11,9 @@ from __future__ import annotations
 
 import json
 import os
+import platform
+import re
+import subprocess
 import time
 import threading
 from dataclasses import dataclass, field
@@ -695,3 +698,176 @@ Return the complete result again as STRICT valid JSON only. No markdown. No trai
         if starts:
             text = text[min(starts):].strip()
         return text
+
+
+# ── CLI backend ───────────────────────────────────────────────────────────────
+
+def _strip_ansi(text: str) -> str:
+    return re.sub(r'\x1b\[[0-9;]*[mGKHF]', '', text)
+
+
+# Windows: npm cai 'claude.cmd', subprocess can't resolve extension-less name
+_CLAUDE_CMD = "claude.cmd" if platform.system() == "Windows" else "claude"
+
+
+class CliApiClient:
+    """
+    Backend dung claude CLI thay vi HTTP.
+    Yeu cau: 'claude' CLI da cai va da dang nhap (claude login).
+    Bat bang: api_backend: cli trong config.yaml.
+    Model mac dinh: claude-opus-4-8 (Max 20x).
+    """
+
+    _MAX_RETRIES = 3
+    _RETRY_DELAY = 10   # seconds, tang dan theo attempt
+    _TIMEOUT     = 300  # seconds per call
+
+    _QUOTA_MARKERS = ("rate limit", "too many requests", "usage limit", "quota", "overloaded", "529")
+
+    def __init__(
+        self,
+        cli_model: str = "claude-opus-4-8",
+        log_fn=None,
+        stop_event: threading.Event | None = None,
+        fallback: "ApiClient | None" = None,
+    ):
+        self._cli_model    = cli_model
+        self.log_fn        = log_fn or (lambda msg: None)
+        self.stop_event    = stop_event
+        self._fallback     = fallback      # ApiClient dung khi CLI het quota
+        self._quota_hit    = False         # True = da chuyen sang fallback vinh vien
+
+    def _log(self, msg: str) -> None:
+        self.log_fn(msg)
+
+    def call(
+        self,
+        stage: str,
+        system: str,
+        user_message: str,
+        max_tokens: int = 4096,
+        model: str | None = None,
+        temperature: float = 0.7,
+    ) -> ApiResponse:
+        chosen_model = self._cli_model  # CLI backend luon dung cli_model, bo qua model tu pipeline
+        full_prompt  = f"<system>\n{system}\n</system>\n\n{user_message}" if system else user_message
+
+        # Neu da het quota, dung fallback luon
+        if self._quota_hit and self._fallback:
+            return self._fallback.call(stage, system, user_message, max_tokens, model, temperature)
+
+        self._log(f"[CLI] {stage} input={len(user_message):,} chars, model={chosen_model}")
+
+        last_err: Exception | None = None
+        for attempt in range(1, self._MAX_RETRIES + 1):
+            if self.stop_event and self.stop_event.is_set():
+                raise RuntimeError("Stopped by user")
+
+            self._log(f"[CLI] {stage} -> {chosen_model} (attempt {attempt}/{self._MAX_RETRIES})")
+            t0 = time.time()
+            try:
+                # Loc env: bo ANTHROPIC_* de claude CLI dung OAuth session cua no
+                # (khong ke thua ANTHROPIC_BASE_URL cua routerapi)
+                clean_env = {k: v for k, v in os.environ.items()
+                             if k not in ("ANTHROPIC_BASE_URL", "ANTHROPIC_API_KEY",
+                                          "ANTHROPIC_AUTH_TOKEN")}
+                proc = subprocess.run(
+                    [_CLAUDE_CMD, "--print", "--model", chosen_model],
+                    input=full_prompt,
+                    capture_output=True,
+                    text=True,
+                    timeout=self._TIMEOUT,
+                    encoding="utf-8",
+                    errors="replace",
+                    env=clean_env,
+                )
+                elapsed = time.time() - t0
+
+                if proc.returncode != 0:
+                    detail = (proc.stderr or proc.stdout or "").strip()[:300]
+                    last_err = RuntimeError(f"claude exit {proc.returncode}: {detail}")
+                    self._log(f"[CLI] {stage} attempt {attempt} failed ({elapsed:.1f}s): exit {proc.returncode}: {detail}")
+                    # Neu la quota/rate-limit -> chuyen sang HTTP fallback ngay
+                    detail_lower = detail.lower()
+                    if any(m in detail_lower for m in self._QUOTA_MARKERS) and self._fallback:
+                        self._quota_hit = True
+                        self._log(f"[CLI] Quota/rate-limit — chuyen sang HTTP fallback vinh vien")
+                        return self._fallback.call(stage, system, user_message, max_tokens, model, temperature)
+                    # tiep tuc retry
+                else:
+                    text = _strip_ansi(proc.stdout).strip()
+                    if not text:
+                        last_err = ValueError("claude CLI returned empty output")
+                        self._log(f"[CLI] {stage} attempt {attempt} empty output ({elapsed:.1f}s)")
+                    else:
+                        self._log(f"[CLI] {stage} OK — {len(text):,} chars, {elapsed:.1f}s")
+                        return ApiResponse(text=text, model=chosen_model, stage=stage, elapsed=elapsed)
+
+            except FileNotFoundError:
+                raise RuntimeError(
+                    f"claude CLI not found ({_CLAUDE_CMD}) — cai tu https://claude.ai/code va chay 'claude login'"
+                )
+            except subprocess.TimeoutExpired:
+                last_err = TimeoutError(f"claude CLI timeout after {self._TIMEOUT}s")
+                self._log(f"[CLI] {stage} attempt {attempt} timed out")
+            except Exception as e:
+                elapsed = time.time() - t0
+                last_err = e
+                self._log(f"[CLI] {stage} attempt {attempt} failed ({elapsed:.1f}s): {e}")
+
+            if attempt < self._MAX_RETRIES:
+                wait = self._RETRY_DELAY * attempt
+                self._log(f"[CLI] Waiting {wait}s before retry...")
+                if self.stop_event:
+                    if self.stop_event.wait(wait):
+                        raise RuntimeError("Stopped by user")
+                else:
+                    time.sleep(wait)
+
+        raise RuntimeError(f"CLI {stage} failed after {self._MAX_RETRIES} attempts: {last_err}")
+
+    def call_json(
+        self,
+        stage: str,
+        system: str,
+        user_message: str,
+        max_tokens: int = 4096,
+        model: str | None = None,
+        parse_retries: int = 2,
+    ) -> dict:
+        parse_feedback = ""
+        for parse_attempt in range(1, parse_retries + 2):
+            msg = user_message if not parse_feedback else (
+                f"{user_message}\n\nPREVIOUS RESPONSE REJECTED:\n{parse_feedback}\n\n"
+                "Return STRICT valid JSON only. No markdown. No explanation."
+            )
+            resp = self.call(stage, system, msg, max_tokens, model)
+            text = ApiClient._extract_json_text(resp.text)
+            try:
+                return json.loads(text)
+            except json.JSONDecodeError as e:
+                parse_feedback = f"Invalid JSON: {e}. Preview: {text[:300]}"
+                self._log(f"[CLI] {stage} malformed JSON ({parse_attempt}/{parse_retries + 1}): {e}")
+                if parse_attempt > parse_retries:
+                    raise ValueError(
+                        f"Stage '{stage}' non-JSON after {parse_retries + 1} attempts: {e}"
+                    ) from e
+        raise RuntimeError(f"Stage '{stage}' JSON parsing failed")
+
+
+def make_client(
+    cfg: dict,
+    log_fn=None,
+    stop_event: threading.Event | None = None,
+) -> "ApiClient | CliApiClient":
+    """
+    Factory: tra ve ApiClient (HTTP) hoac CliApiClient tuy theo api_backend trong config.
+    Dung thay cho ApiClient() truc tiep o gui.py va run.py.
+    """
+    backend = cfg.get("api_backend", "http")
+    if backend == "cli":
+        cli_model = cfg.get("cli_model", "claude-opus-4-8")
+        http_fallback = ApiClient(log_fn=log_fn, stop_event=stop_event)
+        return CliApiClient(cli_model=cli_model, log_fn=log_fn, stop_event=stop_event,
+                            fallback=http_fallback)
+    return ApiClient(log_fn=log_fn, stop_event=stop_event)

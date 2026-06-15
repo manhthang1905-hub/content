@@ -1,28 +1,22 @@
-# TẠO TIÊU ĐỀ + TEXT THUMB
+# CREATE TITLE + THUMBNAIL TEXT
 
-Đây là tiêu đề video ĐỐI THỦ đã viral: "<<COMPETITOR_TITLE>>"
-Ngữ cảnh nội dung (đầu kịch bản đối thủ): <<TRANSCRIPT_SAMPLE>>
+Competitor's viral title: "<<COMPETITOR_TITLE>>"
+Content context (opening of competitor script): <<TRANSCRIPT_SAMPLE>>
 
-Tạo TIÊU ĐỀ + TEXT THUMB mới cho kênh, bằng <<LANGUAGE>>.
+Create a new TITLE + THUMBNAIL TEXT for this channel, in <<LANGUAGE>>.
 
-## Khán giả & kênh
-<<AUDIENCE>>
+## Channel voice
+<<CHANNEL>>
 
-## Chế độ của kênh này: <<MODE>>
-- Nếu **faithful**: tiêu đề/thumb của đối thủ đã win, nên dùng gần như Y NGUYÊN —
-  chỉ chuyển sang <<LANGUAGE>>. Giữ đúng lời hứa, đúng độ giật/tò mò. KHÔNG tự chế.
-- Nếu **restyled**: phân tích vì sao tiêu đề đối thủ hút (lời hứa gì, gợi tò mò/cảm
-  xúc ở đâu) rồi VIẾT LẠI theo văn phong kênh dưới đây — vẫn giữ lời hứa cốt lõi,
-  nhưng khác bản faithful để 3 kênh cùng nước không trùng nhau.
+## This channel's mode: <<MODE>>
+- **faithful**: stay close to the original, just adapt to <<LANGUAGE>>. Preserve the promise, the hook, the curiosity.
+- **restyled**: rewrite using the channel voice (see above), keep the core promise.
 
-Văn phong kênh (dùng cho chế độ restyled):
-<<VOICE>>
+## Rules
+- TITLE: in <<LANGUAGE>>, compelling, keeps the promise; **max 100 characters**.
+- THUMB TEXT: high-impact short phrase (max ~8 words) — the most shocking or curiosity-triggering part. <<CASING>>
+- Localize for that country's audience — not a literal translation.
 
-## Quy tắc
-- TIÊU ĐỀ: bằng <<LANGUAGE>>, cuốn, giữ lời hứa; **KHÔNG quá 100 ký tự**.
-- TEXT THUMB: cụm từ đắt, ngắn (tối đa ~8 từ) — phần gây sốc/tò mò nhất. <<CASING>>
-- Bản địa hóa cho khán giả nước đó, không dịch máy sống sượng.
-
-## Trả về ĐÚNG 2 dòng (không thêm gì khác)
-TITLE: <tiêu đề>
-THUMB: <text thumb>
+## Return EXACTLY 2 lines (nothing else)
+TITLE: <title>
+THUMB: <thumb text>

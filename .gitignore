@@ -6,8 +6,8 @@ __pycache__/
 output/
 
 # Bí mật — mỗi máy có file riêng, KHÔNG đưa lên GitHub
-.env
-creds.json
+config/.env
+config/creds.json
 api_keys.json
 
 # Log tạm

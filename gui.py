@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import os
 import queue
+import re
 import sys
 import threading
 import time
@@ -26,6 +27,21 @@ ROOT = Path(__file__).parent
 CORE = ROOT / "core"
 TOPICS = ROOT / "topics"
 sys.path.insert(0, str(CORE))
+
+
+def load_env() -> None:
+    env_path = ROOT / "config" / ".env"
+    if not env_path.exists():
+        return
+    for line in env_path.read_text(encoding="utf-8").splitlines():
+        line = line.strip()
+        if not line or line.startswith("#") or "=" not in line:
+            continue
+        key, val = line.split("=", 1)
+        os.environ[key.strip()] = val.strip()  # overwrite để đảm bảo key luôn đúng
+
+
+load_env()  # phải chạy trước khi import api (api.py đọc key lúc module load)
 
 import yaml  # noqa: E402
 
@@ -52,9 +68,9 @@ TH = {
 PIPELINE_STEPS = [
     ("fetch", "Fetch"),
     ("title", "Title"),
-    ("analyze", "Analyze"),
     ("write", "Write"),
-    ("merge", "Merge"),
+    ("check", "Check"),
+    ("seo", "SEO"),
     ("sheet", "Sheet"),
 ]
 
@@ -64,34 +80,137 @@ AUTO_START_ENABLED = os.environ.get("CONTENT_NO_AUTOSTART", "").strip().lower() 
 DEFAULT_WORKERS = max(1, min(4, int(os.environ.get("CONTENT_DEFAULT_WORKERS", "3"))))
 
 
-def load_env() -> None:
-    env_path = ROOT / ".env"
-    if not env_path.exists():
-        return
-    for line in env_path.read_text(encoding="utf-8").splitlines():
-        line = line.strip()
-        if not line or line.startswith("#") or "=" not in line:
-            continue
-        key, val = line.split("=", 1)
-        os.environ.setdefault(key.strip(), val.strip())
-
-
 def load_config() -> dict:
-    with open(ROOT / "config.yaml", "r", encoding="utf-8") as f:
+    with open(ROOT / "config" / "config.yaml", "r", encoding="utf-8") as f:
         return yaml.safe_load(f)
 
 
+def _get_version() -> str:
+    try:
+        import subprocess as _sp
+        r = _sp.run(["git", "rev-parse", "--short", "HEAD"],
+                    capture_output=True, text=True, cwd=str(ROOT), timeout=3)
+        return r.stdout.strip() or "dev"
+    except Exception:
+        return "dev"
+
+
+def _patch_yaml_key(key: str, value: str) -> None:
+    path = ROOT / "config" / "config.yaml"
+    text = path.read_text(encoding="utf-8")
+    text = re.sub(rf'^({re.escape(key)}:\s*).*$', rf'\g<1>{value}', text, flags=re.MULTILINE)
+    path.write_text(text, encoding="utf-8")
+
+
+def _patch_network_drives(drives: dict) -> None:
+    path = ROOT / "config" / "config.yaml"
+    text = path.read_text(encoding="utf-8")
+    block = "network_drives:\n" + "\n".join(f"  {k}: '{drives[k]}'" for k in sorted(drives))
+    text = re.sub(r'^network_drives:(?:\n  \w[^\n]*)*', lambda _: block, text, flags=re.MULTILINE)
+    path.write_text(text, encoding="utf-8")
+
+
+def _save_smb_env(user: str, pwd: str) -> None:
+    env_path = ROOT / "config" / ".env"
+    text = env_path.read_text(encoding="utf-8")
+    if "SMB_USER=" in text:
+        text = re.sub(r'^SMB_USER=.*$', f'SMB_USER={user}', text, flags=re.MULTILINE)
+    else:
+        text += f"\nSMB_USER={user}"
+    if "SMB_PASS=" in text:
+        text = re.sub(r'^SMB_PASS=.*$', f'SMB_PASS={pwd}', text, flags=re.MULTILINE)
+    else:
+        text += f"\nSMB_PASS={pwd}"
+    env_path.write_text(text, encoding="utf-8")
+
+
 def save_active_topic(topic: str) -> None:
-    cfg = load_config()
-    cfg["active_topic"] = topic
-    with open(ROOT / "config.yaml", "w", encoding="utf-8") as f:
-        yaml.safe_dump(cfg, f, allow_unicode=True, sort_keys=False)
+    _patch_yaml_key("active_topic", topic)
+
+
+def save_backend(backend: str) -> None:
+    _patch_yaml_key("api_backend", backend)
+
 
 
 def list_topics() -> list[str]:
     if not TOPICS.exists():
         return []
     return sorted(p.name for p in TOPICS.iterdir() if p.is_dir())
+
+
+class DriveConfigDialog(tk.Toplevel):
+    _NET_USE_RE = re.compile(
+        r'net\s+use\s+([A-Za-z]):?\s+(\\\\[^\s]+)\s+/user:(\S+)\s+(\S+)',
+        re.IGNORECASE,
+    )
+
+    def __init__(self, app: "ContentApp"):
+        super().__init__(app)
+        self.app = app
+        self.title("Network Drives")
+        self.configure(bg=TH["bg"])
+        self.geometry("580x280")
+        self.resizable(False, False)
+        self.transient(app)
+        self.grab_set()
+
+        tk.Label(self, text="Net use commands (1 lenh 1 dong):",
+                 bg=TH["bg"], fg=TH["sub"], font=("Segoe UI Semibold", 9)).pack(anchor="w", padx=14, pady=(12, 4))
+
+        self.text = tk.Text(self, height=7, bg=TH["card"], fg=TH["text"],
+                            insertbackground=TH["text"], relief="flat", bd=0,
+                            font=("Consolas", 10), padx=10, pady=8)
+        self.text.pack(fill="x", padx=12)
+        self.text.insert("1.0", self._current_commands())
+
+        self.status_lbl = tk.Label(self, text="", bg=TH["bg"], fg=TH["sub"], font=("Segoe UI", 9))
+        self.status_lbl.pack(anchor="w", padx=14, pady=(6, 0))
+
+        btn_row = tk.Frame(self, bg=TH["bg"])
+        btn_row.pack(fill="x", padx=12, pady=10)
+        tk.Button(btn_row, text="Apply & Reconnect", command=self._apply,
+                  bg=TH["accent"], fg=TH["text"], relief="flat", bd=0,
+                  font=("Segoe UI Semibold", 9), padx=12, pady=5, cursor="hand2").pack(side="left")
+        tk.Button(btn_row, text="Cancel", command=self.destroy,
+                  bg=TH["overlay"], fg=TH["sub"], relief="flat", bd=0,
+                  font=("Segoe UI Semibold", 9), padx=12, pady=5, cursor="hand2").pack(side="left", padx=(8, 0))
+
+    def _current_commands(self) -> str:
+        drives = self.app.cfg.get("network_drives", {})
+        user = os.environ.get("SMB_USER", "smbuser")
+        pwd  = os.environ.get("SMB_PASS", "")
+        return "\n".join(
+            f"net use {k}: {drives[k]} /user:{user} {pwd} /persistent:yes"
+            for k in sorted(drives)
+        )
+
+    def _apply(self) -> None:
+        raw = self.text.get("1.0", "end").strip()
+        drives, user, pwd = {}, "", ""
+        for line in raw.splitlines():
+            m = self._NET_USE_RE.search(line.strip())
+            if m:
+                drives[m.group(1).upper()] = m.group(2)
+                user, pwd = m.group(3), m.group(4)
+        if not drives:
+            self.status_lbl.config(text="Khong phan tich duoc lenh nao", fg=TH["red"])
+            return
+        _patch_network_drives(drives)
+        _save_smb_env(user, pwd)
+        self.app.cfg["network_drives"] = drives
+        os.environ["SMB_USER"] = user
+        os.environ["SMB_PASS"] = pwd
+        self.status_lbl.config(text="Da luu — dang ket noi...", fg=TH["yellow"])
+        self.update()
+
+        def do_connect():
+            import pipeline as _pl
+            _pl.ensure_drives(self.app.cfg, log=lambda m: self.app.log_q.put(("log", m)))
+            self.app.log_q.put(("log", f"[drive] Drives da cap nhat: {sorted(drives.keys())}"))
+            self.after(0, lambda: self.status_lbl.config(text="Hoan thanh!", fg=TH["green"]))
+
+        threading.Thread(target=do_connect, daemon=True).start()
 
 
 class RunnerThread(threading.Thread):
@@ -112,7 +231,7 @@ class RunnerThread(threading.Thread):
         self.log_q.put(("log", prefix + msg))
 
     def run(self) -> None:
-        api = api_mod.ApiClient(log_fn=self.log, stop_event=self.stop_event)
+        api = api_mod.make_client(self.cfg, log_fn=self.log, stop_event=self.stop_event)
         ok = 0
         for job in self.jobs:
             if self.stop_event.is_set():
@@ -142,12 +261,12 @@ class RunnerThread(threading.Thread):
                         self.cfg["sheet"],
                         result["ma"],
                         result["script"],
+                        seo=result.get("seo", ""),
                         log=lambda m, _ma=ma: self.log(f"[{_ma}] {m}"),
                     )
                     ok += 1
                     self.log_q.put(("job_status", ma, "done"))
-                    self.log_q.put(("job_quality", ma, result.get("quality_score", result.get("avg_score", 0))))
-                    self.log(f"[{ma}] Hoàn thành — quality {result.get('quality_score', 0)}/10 · điểm part TB {result.get('avg_score', 0)}/10")
+                    self.log(f"[{ma}] Hoàn thành — {result.get('chars', 0):,} ký tự")
                 else:
                     self.log_q.put(("job_status", ma, "error"))
                     self.log(f"[{ma}] Lỗi: result không ok")
@@ -169,11 +288,9 @@ class ContentApp(tk.Tk):
         self.minsize(900, 540)
         self.protocol("WM_DELETE_WINDOW", self.on_close)
 
-        load_env()
         self.cfg = load_config()
         self.jobs: list[dict] = []
         self.job_status: dict[str, str] = {}
-        self.job_quality: dict[str, float] = {}
         self.log_q: queue.Queue = queue.Queue()
         self.runner: RunnerThread | None = None
         self.runners: list[RunnerThread] = []
@@ -197,79 +314,112 @@ class ContentApp(tk.Tk):
         if AUTO_START_ENABLED:
             self.after(max(0, AUTO_START_DELAY_SEC) * 1000, self.auto_start_once)
 
+    def _clabel(self, parent, text: str) -> None:
+        tk.Label(parent, text=text, font=("Segoe UI Semibold", 8),
+                 bg=TH["card"], fg=TH["sub"]).pack(side="left")
+
+    def _sep(self, parent) -> None:
+        tk.Frame(parent, bg=TH["border"], width=1).pack(side="left", fill="y", padx=10)
+
     def build_ui(self) -> None:
-        header = tk.Frame(self, bg=TH["bg"], padx=12, pady=8)
+        # ── Row 1: brand + main actions ─────────────────────────
+        header = tk.Frame(self, bg=TH["bg"], padx=12, pady=10)
         header.pack(fill="x")
 
         row1 = tk.Frame(header, bg=TH["bg"])
         row1.pack(fill="x")
-        tk.Label(row1, text="CONTENT", font=("Segoe UI Bold", 16), bg=TH["bg"], fg=TH["text"]).pack(side="left")
-        tk.Label(row1, text="  remake content pipeline", font=("Segoe UI", 11), bg=TH["bg"], fg=TH["muted"]).pack(side="left")
+        tk.Label(row1, text="CONTENT", font=("Segoe UI Bold", 16),
+                 bg=TH["bg"], fg=TH["text"]).pack(side="left")
+        tk.Label(row1, text=f"  v{_get_version()}",
+                 font=("Segoe UI", 10), bg=TH["bg"], fg=TH["muted"]).pack(side="left")
 
         self.auto_btn = self.btn(row1, "AUTO", self.toggle_auto, primary=True)
         self.auto_btn.pack(side="right", padx=(6, 0))
-        self.sync_btn = self.btn(row1, "Sync Sheets", self.load_jobs)
+        self.sync_btn = self.btn(row1, "Sync", self.load_jobs)
         self.sync_btn.pack(side="right", padx=(6, 0))
-        self.sys_btn = self.btn(row1, "System Log", lambda: self.switch_log("system"))
-        self.sys_btn.pack(side="right", padx=(6, 0))
+        self.update_btn = self.btn(row1, "Update", self.do_update)
+        self.update_btn.pack(side="right", padx=(6, 0))
 
-        worker_box = tk.Frame(row1, bg=TH["overlay"], padx=8, pady=4)
-        worker_box.pack(side="right", padx=(0, 6))
-        tk.Label(worker_box, text="Luồng", font=("Segoe UI Semibold", 9), bg=TH["overlay"], fg=TH["sub"]).pack(side="left")
+        # ── Row 2: controls bar ──────────────────────────────────
+        row2 = tk.Frame(header, bg=TH["card"], padx=10, pady=7)
+        row2.pack(fill="x", pady=(8, 0))
+
+        # Workers
+        self._clabel(row2, "Luong")
         self.workers_var = tk.StringVar(value=str(DEFAULT_WORKERS))
         self.workers_spin = tk.Spinbox(
-            worker_box, from_=1, to=4, width=2, textvariable=self.workers_var,
-            bg=TH["overlay"], fg=TH["text"], buttonbackground=TH["border"],
+            row2, from_=1, to=4, width=2, textvariable=self.workers_var,
+            bg=TH["card"], fg=TH["text"], buttonbackground=TH["border"],
             relief="flat", bd=0, justify="center", font=("Segoe UI Semibold", 10),
         )
-        self.workers_spin.pack(side="left", padx=(6, 0))
-        topic_box = tk.Frame(row1, bg=TH["overlay"], padx=8, pady=4)
-        topic_box.pack(side="right", padx=(0, 6))
-        tk.Label(topic_box, text="Topic", font=("Segoe UI Semibold", 9), bg=TH["overlay"], fg=TH["sub"]).pack(side="left")
+        self.workers_spin.pack(side="left", padx=(4, 0))
+
+        self._sep(row2)
+
+        # Topic
+        self._clabel(row2, "Topic")
         topics = list_topics()
         self.topic_var = tk.StringVar(value=self.cfg.get("active_topic", topics[0] if topics else ""))
-        self.topic_combo = ttk.Combobox(topic_box, textvariable=self.topic_var, values=topics, width=18, state="readonly")
-        self.topic_combo.pack(side="left", padx=(6, 0))
+        self.topic_combo = ttk.Combobox(row2, textvariable=self.topic_var, values=topics,
+                                        width=14, state="readonly")
+        self.topic_combo.pack(side="left", padx=(4, 0))
         self.topic_combo.bind("<<ComboboxSelected>>", lambda _e: self.change_topic())
 
-        row2 = tk.Frame(header, bg=TH["bg"])
-        row2.pack(fill="x", pady=(6, 0))
+        self._sep(row2)
+
+        # Backend
+        self._clabel(row2, "Backend")
+        self.backend_var = tk.StringVar(value=self.cfg.get("api_backend", "http"))
+        self.backend_combo = ttk.Combobox(row2, textvariable=self.backend_var,
+                                          values=["cli", "http"], width=5, state="readonly")
+        self.backend_combo.pack(side="left", padx=(4, 0))
+        self.backend_combo.bind("<<ComboboxSelected>>", lambda _e: self.change_backend())
+        self.check_btn = self.btn(row2, "Check", self.check_backend)
+        self.check_btn.config(font=("Segoe UI", 8), padx=6, pady=2)
+        self.check_btn.pack(side="left", padx=(6, 0))
+
+        # Right side of controls bar
+        self.sys_btn = self.btn(row2, "System Log", lambda: self.switch_log("system"))
+        self.sys_btn.pack(side="right")
+        self.drives_btn = self.btn(row2, "Drives", self.open_drive_config)
+        self.drives_btn.pack(side="right", padx=(0, 8))
+
+        # ── Row 3: badges + filter ───────────────────────────────
+        row3 = tk.Frame(header, bg=TH["bg"])
+        row3.pack(fill="x", pady=(6, 6))
+
         self.badges: dict[str, tk.Label] = {}
         for key, text, color in [
-            ("running", "0 đang chạy", TH["accent"]),
-            ("queued", "0 chờ", TH["yellow"]),
-            ("done", "0 xong", TH["green"]),
-            ("error", "0 lỗi", TH["red"]),
+            ("running", "0 chay",  TH["accent"]),
+            ("queued",  "0 cho",   TH["yellow"]),
+            ("done",    "0 xong",  TH["green"]),
+            ("error",   "0 loi",   TH["red"]),
         ]:
-            lbl = tk.Label(row2, text=text, bg=color, fg=TH["text"], font=("Segoe UI Semibold", 8), padx=8, pady=3)
-            lbl.pack(side="left", padx=(0, 5))
+            lbl = tk.Label(row3, text=text, bg=color, fg=TH["text"],
+                           font=("Segoe UI Semibold", 8), padx=8, pady=3)
+            lbl.pack(side="left", padx=(0, 4))
             self.badges[key] = lbl
 
-        filter_box = tk.Frame(row2, bg=TH["bg"])
+        filter_box = tk.Frame(row3, bg=TH["bg"])
         filter_box.pack(side="right")
-        tk.Label(filter_box, text="Lọc", font=("Segoe UI Semibold", 8), bg=TH["bg"], fg=TH["muted"]).pack(side="left", padx=(0, 4))
+        tk.Label(filter_box, text="Loc", font=("Segoe UI Semibold", 8),
+                 bg=TH["bg"], fg=TH["muted"]).pack(side="left", padx=(0, 4))
         self.filter_combo = ttk.Combobox(
-            filter_box,
-            textvariable=self.filter_var,
+            filter_box, textvariable=self.filter_var,
             values=["todo", "all", "queued", "running", "done", "error"],
-            width=10,
-            state="readonly",
+            width=9, state="readonly",
         )
         self.filter_combo.pack(side="left", padx=(0, 6))
         self.filter_combo.bind("<<ComboboxSelected>>", lambda _e: self.rebuild_cards())
         self.search_entry = tk.Entry(
-            filter_box,
-            textvariable=self.search_var,
-            width=24,
-            bg=TH["overlay"],
-            fg=TH["text"],
-            insertbackground=TH["text"],
-            relief="flat",
-            font=("Segoe UI", 9),
+            filter_box, textvariable=self.search_var, width=22,
+            bg=TH["overlay"], fg=TH["text"], insertbackground=TH["text"],
+            relief="flat", font=("Segoe UI", 9),
         )
         self.search_entry.pack(side="left")
         self.search_entry.bind("<KeyRelease>", lambda _e: self.rebuild_cards())
 
+        # ── Body ────────────────────────────────────────────────
         body = tk.Frame(self, bg=TH["bg"])
         body.pack(fill="both", expand=True, padx=10, pady=(0, 10))
         body.columnconfigure(0, minsize=320)
@@ -358,6 +508,90 @@ class ContentApp(tk.Tk):
         self.log(f"Đã đổi active_topic: {topic}")
         self.load_jobs()
 
+    def do_update(self) -> None:
+        self.update_btn.config(state="disabled", text="...")
+        import threading as _t
+
+        def _via_git() -> str:
+            import subprocess as _sp
+            _sp.run(["git", "--version"], capture_output=True, check=True, timeout=5)
+            r = _sp.run(
+                ["git", "pull"], capture_output=True, text=True, cwd=str(ROOT), timeout=60,
+            )
+            return (r.stdout or r.stderr or "").strip()
+
+        def _via_zip() -> str:
+            import shutil, tempfile, urllib.request, zipfile
+            url = "https://github.com/manhthang1905-hub/content/archive/refs/heads/main.zip"
+            self.log_q.put(("log", "[Update] Git khong co — tai ZIP tu GitHub..."))
+            with tempfile.TemporaryDirectory() as tmp:
+                zip_path = os.path.join(tmp, "update.zip")
+                urllib.request.urlretrieve(url, zip_path)
+                with zipfile.ZipFile(zip_path, "r") as zf:
+                    zf.extractall(tmp)
+                src = os.path.join(tmp, "content-main")
+                skip = {"config", "output"}
+                for item in os.listdir(src):
+                    if item in skip:
+                        continue
+                    s = os.path.join(src, item)
+                    d = os.path.join(str(ROOT), item)
+                    if os.path.isdir(s):
+                        if os.path.exists(d):
+                            shutil.rmtree(d)
+                        shutil.copytree(s, d)
+                    else:
+                        shutil.copy2(s, d)
+            return "Xong (ZIP). Khoi dong lai de ap dung."
+
+        def worker():
+            try:
+                try:
+                    out = _via_git()
+                except Exception:
+                    out = _via_zip()
+                self.log_q.put(("log", f"[Update] {out[:300]}"))
+            except Exception as exc:
+                self.log_q.put(("log", f"[Update] LOI: {exc}"))
+            self.after(0, lambda: self.update_btn.config(state="normal", text="Update"))
+
+        _t.Thread(target=worker, daemon=True).start()
+
+    def open_drive_config(self) -> None:
+        DriveConfigDialog(self)
+
+    def change_backend(self) -> None:
+        if self.auto_running:
+            self.log("Không đổi backend khi AUTO đang chạy")
+            self.backend_var.set(self.cfg.get("api_backend", "http"))
+            return
+        backend = self.backend_var.get()
+        save_backend(backend)
+        self.cfg = load_config()
+        self.log(f"Đã đổi backend: {backend}")
+
+    def check_backend(self) -> None:
+        self.check_btn.config(state="disabled", text="...")
+        cfg = self.cfg.copy()
+
+        def worker():
+            try:
+                client = api_mod.make_client(cfg, log_fn=lambda m: None)
+                resp = client.call(
+                    "check",
+                    system="You are a test assistant.",
+                    user_message="Reply with just: OK",
+                    max_tokens=16,
+                )
+                model_name = getattr(resp, "model", "?")
+                self.log_q.put(("log", f"[Check] OK — model: {model_name}"))
+            except Exception as exc:
+                self.log_q.put(("log", f"[Check] LOI: {exc}"))
+            self.log_q.put(("check_done",))
+
+        threading.Thread(target=worker, daemon=True).start()
+
+
     def load_jobs(self, auto_cycle: bool = False) -> None:
         if self.auto_running:
             return
@@ -388,7 +622,6 @@ class ContentApp(tk.Tk):
         for old in list(self.job_status):
             if old not in seen and self.job_status.get(old) != "running":
                 self.job_status.pop(old, None)
-                self.job_quality.pop(old, None)
                 self.job_logs.pop(old, None)
         self.jobs = jobs
         for job in jobs:
@@ -399,10 +632,10 @@ class ContentApp(tk.Tk):
         self.rebuild_cards()
         self.sync_btn.config(state="normal")
         self.log(f"{len(jobs)} job hợp lệ; bỏ qua {skipped} job thiếu cấu hình kênh")
-        if auto_cycle and self.cycle_active and not self.stop_cycle:
+        if self.cycle_active and not self.stop_cycle and not self.auto_running:
             if any(self.job_status.get(j["ma"], "queued") == "queued" for j in jobs):
                 self.start_runner()
-            else:
+            elif auto_cycle:
                 self.schedule_next_cycle()
 
     def visible_jobs(self) -> list[dict]:
@@ -445,9 +678,7 @@ class ContentApp(tk.Tk):
                 title = title[:46] + "…"
             tk.Label(card, text=title, bg=TH["card"], fg=TH["text"], font=("Segoe UI Bold", 11), anchor="w").pack(fill="x", pady=(4, 0))
             status_color = {"queued": TH["yellow"], "running": TH["accent"], "done": TH["green"], "error": TH["red"]}.get(st, TH["muted"])
-            quality = self.job_quality.get(ma)
-            status_text = st if quality is None else f"{st} — {quality}/10"
-            tk.Label(card, text=status_text, bg=TH["card"], fg=status_color, font=("Segoe UI Semibold", 8), anchor="w").pack(fill="x", pady=(2, 0))
+            tk.Label(card, text=st, bg=TH["card"], fg=status_color, font=("Segoe UI Semibold", 8), anchor="w").pack(fill="x", pady=(2, 0))
 
             def bind_click(widget, _ma=ma):
                 widget.bind("<Button-1>", lambda _e: self.switch_log(_ma))
@@ -480,6 +711,9 @@ class ContentApp(tk.Tk):
         self.sync_btn.config(state="disabled")
         self.topic_combo.config(state="disabled")
         self.workers_spin.config(state="disabled")
+        self.backend_combo.config(state="disabled")
+        self.check_btn.config(state="disabled")
+        self.drives_btn.config(state="disabled")
         n_workers = min(self.get_worker_count(), len(pending))
         queues = [pending[i::n_workers] for i in range(n_workers)]
         self.runners = []
@@ -519,6 +753,9 @@ class ContentApp(tk.Tk):
         self.sync_btn.config(state="normal")
         self.topic_combo.config(state="readonly")
         self.workers_spin.config(state="normal")
+        self.backend_combo.config(state="readonly")
+        self.check_btn.config(state="normal")
+        self.drives_btn.config(state="normal")
         self.log("Đã yêu cầu dừng; job hiện tại sẽ dừng sau khi bước đang chạy kết thúc")
 
     def switch_log(self, ma: str) -> None:
@@ -586,16 +823,16 @@ class ContentApp(tk.Tk):
 
     def update_pipeline_from_log(self, msg: str) -> None:
         step = None
-        if "[fetch]" in msg or "Lấy transcript" in msg:
+        if "[fetch]" in msg:
             step = "fetch"
         elif "[title/thumb]" in msg:
             step = "title"
-        elif "[1/3]" in msg:
-            step = "analyze"
-        elif "[2/3]" in msg or "Khúc " in msg:
+        elif "[write]" in msg:
             step = "write"
-        elif "[3/3]" in msg:
-            step = "merge"
+        elif "[check]" in msg:
+            step = "check"
+        elif "[seo]" in msg:
+            step = "seo"
         elif "[sheets]" in msg:
             step = "sheet"
         if not step:
@@ -632,8 +869,10 @@ class ContentApp(tk.Tk):
                     self.system_logs.append(line)
                 else:
                     self.job_logs.setdefault(dest, []).append(line)
+                    if any(mark in msg for mark in ("[title/thumb]", "[sheets]", "Hoàn thành", "Lỗi:")):
+                        self.system_logs.append(line)
                     self.update_pipeline_from_log(msg)
-                if self.selected_log == dest:
+                if self.selected_log == dest or (dest != "system" and self.selected_log == "system" and line in self.system_logs[-1:]):
                     self.append_log(line)
             elif kind == "jobs":
                 _, jobs, skipped, cfg, auto_cycle = item
@@ -641,10 +880,6 @@ class ContentApp(tk.Tk):
             elif kind == "job_status":
                 _, ma, st = item
                 self.job_status[ma] = st
-                changed = True
-            elif kind == "job_quality":
-                _, ma, q = item
-                self.job_quality[ma] = q
                 changed = True
             elif kind == "all_done":
                 _, ok, total = item
@@ -659,11 +894,16 @@ class ContentApp(tk.Tk):
                     self.sync_btn.config(state="normal")
                     self.topic_combo.config(state="readonly")
                     self.workers_spin.config(state="normal")
+                    self.backend_combo.config(state="readonly")
+                    self.check_btn.config(state="normal")
+                    self.drives_btn.config(state="normal")
                     if self.cycle_active and not self.stop_cycle:
                         self.schedule_next_cycle()
                     changed = True
             elif kind == "sync_done":
                 self.sync_btn.config(state="normal")
+            elif kind == "check_done":
+                self.check_btn.config(state="normal", text="Check")
         if changed:
             self.rebuild_cards()
         self.after(200, self.pump_logs)

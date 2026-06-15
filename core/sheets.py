@@ -15,7 +15,7 @@ import gspread
 from oauth2client.service_account import ServiceAccountCredentials
 
 _ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))  # core/ → CONTENT/
-CREDS_FILE = os.path.join(_ROOT, "creds.json")
+CREDS_FILE = os.path.join(_ROOT, "config", "creds.json")
 
 _SCOPE = [
     "https://www.googleapis.com/auth/spreadsheets",

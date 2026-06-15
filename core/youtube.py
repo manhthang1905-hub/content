@@ -14,8 +14,10 @@ Phương án cascade:
 Output: ./input_cache/{video_id}.json
 """
 
-import sys, os, re, json, html, time, urllib.request
+import sys, os, re, json, html, time, urllib.request, threading
 sys.stdout.reconfigure(encoding='utf-8', errors='replace')
+
+_WHISPER_LOCK = threading.Lock()  # chỉ 1 Whisper job/lúc trên RAM thấp
 
 CONTENT_DIR = os.environ.get("CONTENT_DIR",
     os.path.dirname(os.path.dirname(os.path.abspath(__file__))))  # core/ → CONTENT/
@@ -32,6 +34,28 @@ if os.path.exists(_api_keys_file):
 
 YT_API_KEY    = _api_keys.get('youtube_api_key', '') or os.environ.get('YOUTUBE_API_KEY', '')
 OPENAI_API_KEY = _api_keys.get('openai_api_key', '') or os.environ.get('OPENAI_API_KEY', '')
+OPENAI_API_BASE = _api_keys.get('openai_api_base', '') or 'https://api.openai.com/v1'
+
+# Fallback: đọc OPENAI_API_KEY từ 11lab_vm config nếu chưa có
+if not OPENAI_API_KEY:
+    _11lab_cfg = os.path.join(os.path.dirname(CONTENT_DIR), 'voice', '11lab_vm', 'config', 'config.json')
+    if os.path.exists(_11lab_cfg):
+        try:
+            with open(_11lab_cfg, 'r', encoding='utf-8') as _f:
+                OPENAI_API_KEY = json.load(_f).get('OPENAI_API_KEY', '')
+        except Exception:
+            pass
+
+# Optional cookies file to bypass YouTube IP restrictions on cloud servers.
+# Tìm theo thứ tự ưu tiên; file đầu tiên tìm thấy sẽ được dùng.
+_COOKIES_CANDIDATES = [
+    os.path.join(CONTENT_DIR, 'config', 'youtube.com_cookies.txt'),
+    os.path.join(CONTENT_DIR, 'config', 'youtube_cookies.txt'),
+    os.path.join(CONTENT_DIR, 'youtube_cookies.txt'),
+]
+YOUTUBE_COOKIES = next((p for p in _COOKIES_CANDIDATES if os.path.exists(p)), None)
+if YOUTUBE_COOKIES:
+    print(f"[cookies] Using {YOUTUBE_COOKIES}", file=sys.stderr)
 
 # Detect local ffmpeg (check common locations)
 def _find_ffmpeg() -> str:
@@ -39,6 +63,8 @@ def _find_ffmpeg() -> str:
         os.path.join(CONTENT_DIR, 'ffmpeg', 'bin', 'ffmpeg.exe'),   # Windows local
         os.path.join(CONTENT_DIR, 'ffmpeg', 'ffmpeg.exe'),
         os.path.join(CONTENT_DIR, 'ffmpeg', 'bin', 'ffmpeg'),        # Linux/Mac local
+        # 11lab_vm ffmpeg (shared on same machine)
+        os.path.join(os.path.dirname(CONTENT_DIR), 'voice', '11lab_vm', 'ffmpeg', 'bin', 'ffmpeg.exe'),
         'ffmpeg',  # system PATH
     ]
     for c in candidates:
@@ -94,13 +120,31 @@ def log(msg): print(f"  {msg}", file=sys.stderr)
 # Method 1: youtube-transcript-api
 # ─────────────────────────────────────────────
 
+def _make_yt_session():
+    """Tạo requests.Session với cookies nếu có file cookies."""
+    if not YOUTUBE_COOKIES:
+        return None
+    try:
+        import requests
+        from http.cookiejar import MozillaCookieJar
+        session = requests.Session()
+        jar = MozillaCookieJar(YOUTUBE_COOKIES)
+        jar.load(ignore_discard=True, ignore_expires=True)
+        session.cookies = jar
+        return session
+    except Exception as e:
+        log(f"[cookies] Không load được cookies: {e}")
+        return None
+
+
 def method1_transcript_api(video_id: str) -> tuple:
     from youtube_transcript_api import YouTubeTranscriptApi
     prefer = ['es', 'es-419', 'es-MX', 'es-US', 'en', 'en-US']
 
     # Try v1.x API first
     try:
-        api = YouTubeTranscriptApi()
+        session = _make_yt_session()
+        api = YouTubeTranscriptApi(http_client=session) if session else YouTubeTranscriptApi()
         tlist = api.list(video_id)
         fetched = None
         lang_used = None
@@ -159,6 +203,16 @@ def method2_ytdlp_sub(video_id: str, url: str) -> tuple:
             'outtmpl': os.path.join(tmp, '%(id)s.%(ext)s'),
             'sleep_interval': 3, 'max_sleep_interval': 8,
         }
+        if YOUTUBE_COOKIES:
+            opts['cookiefile'] = YOUTUBE_COOKIES
+            # Node.js + EJS giải n-challenge; Chrome impersonation bypass CDN 429
+            opts['js_runtimes'] = {'node': {}}
+            opts['remote_components'] = ['ejs:github']
+            try:
+                from yt_dlp.networking.impersonate import ImpersonateTarget
+                opts['impersonate'] = ImpersonateTarget('chrome')
+            except Exception:
+                pass
         for attempt in range(3):
             try:
                 with yt_dlp.YoutubeDL(opts) as ydl:
@@ -344,13 +398,6 @@ def method4_whisper(video_id: str, url: str) -> tuple:
     Không cần: ffmpeg
     Giới hạn: video < ~25 phút (file < 25MB)
     """
-    api_key = OPENAI_API_KEY
-    if not api_key:
-        raise RuntimeError(
-            "OPENAI_API_KEY chưa được thiết lập. "
-            "Thêm vào api_keys.json: {\"openai_api_key\": \"sk-...\"}"
-        )
-
     import yt_dlp, tempfile, glob, shutil
 
     tmp_dir = tempfile.mkdtemp()
@@ -403,13 +450,35 @@ def method4_whisper(video_id: str, url: str) -> tuple:
                 "Video dài quá ~25 phút. Cần ffmpeg để nén audio nhỏ hơn."
             )
 
-        # ── Step B: Detect language from metadata ──
+        # ── Step B: Detect language ──
         lang_hint = 'es'
         if hasattr(method4_whisper, '_last_audio_lang'):
-            lang_hint = method4_whisper._last_audio_lang or 'es'
+            raw = method4_whisper._last_audio_lang or 'es'
+            # Whisper chỉ nhận ISO 639-1 (2 ký tự) — strip country code
+            lang_hint = raw.split('-')[0].split('_')[0] or 'es'
 
-        # ── Step C: Send to OpenAI Whisper API ──
+        # ── Step C: Transcribe — local whisper preferred (no API key needed) ──
         log(f"Whisper [B]: transcribing ({file_size_mb:.1f} MB, lang={lang_hint})...")
+        with _WHISPER_LOCK:  # serialise — chỉ 1 job dùng Whisper cùng lúc (RAM)
+            try:
+                import whisper as _whisper
+                log("  dùng local whisper (small model)...")
+                _model = _whisper.load_model("small")
+                _result = _model.transcribe(audio_file, language=lang_hint, fp16=False)
+                text = clean_text(_result["text"])
+                word_count = len(text.split())
+                log(f"Whisper [B]: local SUCCESS — {word_count} words")
+                return text, f'{lang_hint} (whisper-local-small)'
+            except ImportError:
+                log("  local whisper not available, fallback to API...")
+            except Exception as _e:
+                log(f"  local whisper failed: {_e}, fallback to API...")
+
+        # ── Fallback: OpenAI Whisper API ──
+        api_key = OPENAI_API_KEY
+        if not api_key:
+            raise RuntimeError("Cần OPENAI_API_KEY hoặc pip install openai-whisper")
+        log(f"  dùng Whisper API ({OPENAI_API_BASE})...")
 
         # Determine MIME type
         mime_map = {
@@ -452,7 +521,7 @@ def method4_whisper(video_id: str, url: str) -> tuple:
         )
 
         req = urllib.request.Request(
-            'https://api.openai.com/v1/audio/transcriptions',
+            f'{OPENAI_API_BASE}/audio/transcriptions',
             data=body,
             headers={
                 'Authorization': f'Bearer {api_key}',
@@ -655,6 +724,8 @@ def fetch_video_data(url_or_id: str, force: bool = False,
         })
         log(f"Title: {result['title_original'][:80]}")
         log(f"Channel: {result['channel']} | Views: {result['view_count']:,}")
+        # Inform method4 of audio language for accurate Whisper transcription
+        method4_whisper._last_audio_lang = result.get('audio_lang', '') or 'es'
     except Exception as e:
         result['fetch_errors'].append(f"Metadata: {e}")
         log(f"WARNING: Metadata failed: {e}")
@@ -748,3 +819,22 @@ if __name__ == '__main__':
         "cache": cache_file if 'cache_file' in dir() else
                  os.path.join(CACHE_DIR, data['video_id'] + '.json'),
     }, ensure_ascii=False))
+
+
+
+def get_transcript(link: str, out_dir: str, force: bool = False, log=print) -> dict:
+    """Lấy transcript và lưu vào out_dir (thư mục run của job)."""
+    global CACHE_DIR
+    CACHE_DIR = out_dir
+    import os as _os
+    _os.makedirs(out_dir, exist_ok=True)
+    log(f"[fetch] Lấy transcript đối thủ: {link}")
+    data = fetch_video_data(link, force=force)
+    if not data.get("transcript"):
+        errs = " | ".join(data.get("fetch_errors", [])[:3]) or "không rõ"
+        raise RuntimeError(f"Không lấy được transcript từ {link}. Lỗi: {errs}")
+    log(
+        f"[fetch] OK — {len(data.get('transcript',''))} ký tự "
+        f"[{data.get('transcript_lang','?')}] · tiêu đề gốc: {data.get('title_original','')[:60]}"
+    )
+    return data
