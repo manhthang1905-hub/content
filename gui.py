@@ -553,11 +553,17 @@ class ContentApp(tk.Tk):
                 except Exception:
                     out = _via_zip()
                 self.log_q.put(("log", f"[Update] {out[:300]}"))
+                self.after(0, self._restart)
             except Exception as exc:
                 self.log_q.put(("log", f"[Update] LOI: {exc}"))
-            self.after(0, lambda: self.update_btn.config(state="normal", text="Update"))
+                self.after(0, lambda: self.update_btn.config(state="normal", text="Update"))
 
         _t.Thread(target=worker, daemon=True).start()
+
+    def _restart(self) -> None:
+        import subprocess as _sp
+        _sp.Popen([sys.executable, str(ROOT / "gui.py")])
+        self.destroy()
 
     def open_drive_config(self) -> None:
         try:
