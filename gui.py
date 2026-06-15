@@ -18,6 +18,11 @@ from pathlib import Path
 from tkinter import ttk
 
 sys.dont_write_bytecode = True
+# pythonw.exe sets stdout/stderr to None — redirect to devnull so print() in imports doesn't crash
+if sys.stdout is None:
+    sys.stdout = open(os.devnull, "w")
+if sys.stderr is None:
+    sys.stderr = open(os.devnull, "w")
 if sys.stdout:
     sys.stdout.reconfigure(encoding="utf-8", errors="replace")
 if sys.stderr:
