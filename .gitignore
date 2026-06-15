@@ -12,3 +12,6 @@ api_keys.json
 
 # Log tạm
 *.log
+
+# Shortcut (moi may tao rieng)
+*.lnk
