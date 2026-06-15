@@ -95,7 +95,13 @@ def _get_version() -> str:
         import subprocess as _sp
         r = _sp.run(["git", "rev-parse", "--short", "HEAD"],
                     capture_output=True, text=True, cwd=str(ROOT), timeout=3)
-        return r.stdout.strip() or "dev"
+        v = r.stdout.strip()
+        if v:
+            return v
+    except Exception:
+        pass
+    try:
+        return (ROOT / "version.txt").read_text(encoding="utf-8").strip()
     except Exception:
         return "dev"
 
