@@ -276,10 +276,10 @@ def check_fix_oneshot(api, cfg, chan, transcript, draft, log) -> str:
 # ── Mô tả / SEO ───────────────────────────────────────────────────────────────
 def generate_seo(api, cfg, chan, title, script, log) -> str:
     log("[seo] Tạo mô tả video...")
-    opening = "\n".join(script.splitlines()[:20]).strip()
+    opening = "\n".join(script.splitlines()[:40]).strip()
     resp = api.call(
         stage="check",
-        system="You write short YouTube video descriptions. Output the description only.",
+        system="You write YouTube video descriptions for SEO. Output the description only.",
         user_message=render(load_prompt("seo.md"), {
             "LANGUAGE": chan["language"],
             "TITLE": title,
@@ -287,7 +287,7 @@ def generate_seo(api, cfg, chan, title, script, log) -> str:
         }),
         model=cfg["models"]["check"],
         temperature=0.6,
-        max_tokens=200,
+        max_tokens=600,
     )
     text = resp.text.strip()
     log(f"[seo] {len(text)} ký tự")
