@@ -9,15 +9,31 @@ Script excerpt:
 
 ---
 
-Generate YouTube SEO content in **<<LANGUAGE>>**. Use the channel keywords as your base — they define what this channel ranks for.
+Generate YouTube SEO content in **<<LANGUAGE>>**. Follow this exact process:
 
-Output format — use these exact labels, nothing else:
+**Step 1 — Identify the MAIN KEYWORD:**
+From the title, thumbnail text, and channel keywords, determine the single most important keyword phrase for this video. This is what viewers would type to find this video. Keep it concise (2-4 words).
+
+**Step 2 — Write the DESCRIPTION (150–250 words):**
+- First sentence (≤150 characters): include the MAIN KEYWORD naturally. This is visible in search results before "Show more".
+- The MAIN KEYWORD must appear **3 to 5 times** naturally throughout the description — not forced, woven into real sentences that describe what the video covers.
+- End the description with 3–5 hashtags on the last line. The MAIN KEYWORD (as a hashtag, no spaces) comes first. Example: #mainkeyword #related #related2
+
+**Step 3 — Write HASHTAGS:**
+The same 3–5 hashtags from the description, space-separated. MAIN KEYWORD hashtag first.
+
+**Step 4 — Write KEYWORDS (under 500 characters):**
+Comma-separated keyword phrases. Start with the 3–5 hashtag words (without #) as the first keywords. Then add keyword phrases built from the title, thumbnail text, and channel keywords. 8–15 phrases total.
+
+---
+
+Output format — use these exact labels:
 
 DESCRIPTION:
-150–250 words. First sentence (≤150 characters): state clearly what this video is about, include the main keyword naturally — this line appears in search results before "Show more". Then 3–4 sentences covering the key insights or lessons in the video. End the description with 3–5 hashtags on the last line (language-native).
+[full description text, ending with hashtags]
 
 HASHTAGS:
-The same 3–5 hashtags from the description, space-separated. Pick from channel keywords + video topic.
+[3–5 hashtags, main keyword first, space-separated]
 
 KEYWORDS:
-Comma-separated keyword phrases under 500 characters total. 8–15 phrases a viewer would search to find this video. Start from channel keywords, add specific terms from the title and content.
+[comma-separated keyword phrases, under 500 characters]
