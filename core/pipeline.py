@@ -317,6 +317,30 @@ def generate_seo_package(api, cfg, chan, title, thumb, channel_keywords, script,
     return pkg
 
 
+_LANG_NAMES = {
+    "es": "Spanish", "vi": "Vietnamese", "en": "English", "fr": "French",
+    "de": "German", "pt": "Portuguese", "ja": "Japanese", "ko": "Korean",
+    "it": "Italian", "tr": "Turkish",
+}
+
+
+def _load_channel_for_seo(channel_id: str, cfg: dict) -> dict:
+    """Load channel; nếu không có file kênh thì dùng ngôn ngữ từ mã T1..T10."""
+    try:
+        return load_channel(channel_id, cfg)
+    except Exception:
+        pass
+    try:
+        _, lang_num = channel_id.split("-")
+        lang_code = cfg["languages"].get(lang_num, "en")
+        lang_name = _LANG_NAMES.get(lang_code, lang_code)
+        return {"id": channel_id, "lang_code": lang_code,
+                "language": lang_name, "channel": "", "thumb_case": "upper"}
+    except Exception:
+        return {"id": channel_id, "lang_code": "en",
+                "language": "English", "channel": "", "thumb_case": "upper"}
+
+
 # ── Backfill SEO cho rows đã có title/thumb ───────────────────────────────────
 def backfill_seo_job(job: dict, cfg: dict, api, log=print) -> dict:
     ma      = job["ma"]
@@ -325,7 +349,7 @@ def backfill_seo_job(job: dict, cfg: dict, api, log=print) -> dict:
     thumb   = job.get("thumb", "")
     keywords = job.get("keywords", "")
 
-    chan = load_channel(channel, cfg)
+    chan = _load_channel_for_seo(channel, cfg)
 
     # Cố đọc script từ voice folder để làm context tốt hơn
     script = ""

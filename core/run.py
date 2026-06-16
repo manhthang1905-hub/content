@@ -132,9 +132,6 @@ def main() -> None:
         print(f"[SEO] {len(pending)} rows sẽ xử lý", flush=True)
         ok = 0
         for job in pending:
-            if not pipeline.channel_exists(job["channel"], cfg):
-                print(f"[SEO] Bỏ qua {job['ma']}: kênh {job['channel']} không có trong topic '{cfg['active_topic']}'", flush=True)
-                continue
             try:
                 result = pipeline.backfill_seo_job(job, cfg, api, log=lambda m: print(m, flush=True))
                 if result.get("ok"):

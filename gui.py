@@ -397,8 +397,6 @@ class ContentApp(tk.Tk):
         self.sys_btn.pack(side="right")
         self.drives_btn = self.btn(row2, "Drives", self.open_drive_config)
         self.drives_btn.pack(side="right", padx=(0, 8))
-        self.seo_btn = self.btn(row2, "SEO Backfill", self.run_seo_backfill)
-        self.seo_btn.pack(side="right", padx=(0, 6))
 
         # ── Row 3: badges + filter ───────────────────────────────
         row3 = tk.Frame(header, bg=TH["bg"])
@@ -615,10 +613,6 @@ class ContentApp(tk.Tk):
                 self.log_q.put(("log", f"[SEO] Hoan thanh: {ok}/{len(pending)}"))
             except Exception as exc:
                 self.log_q.put(("log", f"[SEO] Loi: {exc}"))
-            self.after(0, lambda: self.seo_btn.config(state="normal", text="SEO Backfill"))
-
-        threading.Thread(target=worker, daemon=True).start()
-
     def open_drive_config(self) -> None:
         try:
             DriveConfigDialog(self)
@@ -779,7 +773,6 @@ class ContentApp(tk.Tk):
         self.backend_combo.config(state="disabled")
         self.check_btn.config(state="disabled")
         self.drives_btn.config(state="disabled")
-        self.seo_btn.config(state="disabled")
         n_workers = min(self.get_worker_count(), len(pending))
         queues = [pending[i::n_workers] for i in range(n_workers)]
         self.runners = []
@@ -822,7 +815,6 @@ class ContentApp(tk.Tk):
         self.backend_combo.config(state="readonly")
         self.check_btn.config(state="normal")
         self.drives_btn.config(state="normal")
-        self.seo_btn.config(state="normal")
         self.log("Đã yêu cầu dừng; job hiện tại sẽ dừng sau khi bước đang chạy kết thúc")
 
     def switch_log(self, ma: str) -> None:
