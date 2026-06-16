@@ -274,24 +274,47 @@ def check_fix_oneshot(api, cfg, chan, transcript, draft, log) -> str:
 
 
 # ── Mô tả / SEO ───────────────────────────────────────────────────────────────
-def generate_seo(api, cfg, chan, title, script, log) -> str:
-    log("[seo] Tạo mô tả video...")
+def _parse_seo_package(text: str) -> dict:
+    result = {"seo": "", "hashtags": "", "seo_kw": ""}
+    current = None
+    buf: list[str] = []
+    for line in text.splitlines():
+        s = line.strip()
+        if s.upper().startswith("DESCRIPTION:"):
+            current = "seo"; buf = [s[12:].strip()] if s[12:].strip() else []
+        elif s.upper().startswith("HASHTAGS:"):
+            if current: result[current] = "\n".join(buf).strip()
+            current = "hashtags"; buf = [s[9:].strip()] if s[9:].strip() else []
+        elif s.upper().startswith("KEYWORDS:"):
+            if current: result[current] = "\n".join(buf).strip()
+            current = "seo_kw"; buf = [s[9:].strip()] if s[9:].strip() else []
+        elif current is not None:
+            buf.append(line)
+    if current:
+        result[current] = "\n".join(buf).strip()
+    return result
+
+
+def generate_seo_package(api, cfg, chan, title, thumb, channel_keywords, script, log) -> dict:
+    log("[seo] Tạo mô tả + hashtag + từ khóa SEO...")
     opening = "\n".join(script.splitlines()[:40]).strip()
     resp = api.call(
         stage="check",
-        system="You write YouTube video descriptions for SEO. Output the description only.",
+        system="You write YouTube SEO content. Output exactly 3 labeled sections: DESCRIPTION, HASHTAGS, KEYWORDS.",
         user_message=render(load_prompt("seo.md"), {
             "LANGUAGE": chan["language"],
             "TITLE": title,
+            "THUMB": thumb,
+            "CHANNEL_KEYWORDS": channel_keywords or "(none)",
             "SCRIPT_OPENING": opening,
         }),
         model=cfg["models"]["check"],
         temperature=0.6,
-        max_tokens=600,
+        max_tokens=800,
     )
-    text = resp.text.strip()
-    log(f"[seo] {len(text)} ký tự")
-    return text
+    pkg = _parse_seo_package(resp.text)
+    log(f"[seo] description {len(pkg['seo'])} chars | hashtags: {pkg['hashtags'][:60]} | kw: {pkg['seo_kw'][:60]}")
+    return pkg
 
 
 # ── Job chính ─────────────────────────────────────────────────────────────────
@@ -324,7 +347,11 @@ def run_job(job: dict, cfg: dict, api, log=print, on_title_thumb=None) -> dict:
     final = check_fix_oneshot(api, cfg, chan, transcript, draft, log)
     final = clean_voice_text(final, blank_line_between_paragraphs=cfg["output"]["blank_line_between_paragraphs"])
 
-    seo = generate_seo(api, cfg, chan, title, final, log)
+    seo_pkg = generate_seo_package(
+        api, cfg, chan, title, thumb,
+        channel_keywords=job.get("keywords", ""),
+        script=final, log=log,
+    )
 
     final_path = os.path.join(run_dir, "final.txt")
     with open(final_path, "w", encoding="utf-8") as f:
@@ -342,7 +369,9 @@ def run_job(job: dict, cfg: dict, api, log=print, on_title_thumb=None) -> dict:
         "title": title,
         "thumb": thumb,
         "script": final,
-        "seo": seo,
+        "seo": seo_pkg["seo"],
+        "hashtags": seo_pkg["hashtags"],
+        "seo_kw": seo_pkg["seo_kw"],
         "final_path": final_path,
         "run_dir": run_dir,
         "chars": final_chars,

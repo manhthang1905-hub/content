@@ -55,12 +55,12 @@ sheet:
     thumb: 20
     channel: 34
     seo: 35
-    content: 36
-    content2: 37
-    content3: 38
+    hashtags: 36
+    seo_kw: 37
   nguon_columns:
     ma: 6
     link: 1
     title: 2
     thumb: 3
     hook: 4
+    keywords: 10

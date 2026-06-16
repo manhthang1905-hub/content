@@ -270,11 +270,12 @@ class RunnerThread(threading.Thread):
                     on_title_thumb=on_title_thumb,
                 )
                 if result.get("ok"):
-                    sheets.write_content(
+                    sheets.write_result(
                         self.cfg["sheet"],
                         result["ma"],
-                        result["script"],
                         seo=result.get("seo", ""),
+                        hashtags=result.get("hashtags", ""),
+                        seo_kw=result.get("seo_kw", ""),
                         log=lambda m, _ma=ma: self.log(f"[{_ma}] {m}"),
                     )
                     ok += 1

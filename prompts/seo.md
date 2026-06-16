@@ -1,22 +1,23 @@
-# CREATE YOUTUBE VIDEO DESCRIPTION
+# YOUTUBE VIDEO SEO
 
 Title: **<<TITLE>>**
+Thumbnail text: **<<THUMB>>**
+Channel keywords: <<CHANNEL_KEYWORDS>>
 
 Script excerpt:
 <<SCRIPT_OPENING>>
 
 ---
 
-Write a YouTube video description in **<<LANGUAGE>>** that helps the video rank in YouTube and Google search.
+Generate YouTube SEO content in **<<LANGUAGE>>**. Use the channel keywords as your base — they define what this channel ranks for.
 
-Structure (follow exactly):
+Output format — use these exact labels, nothing else:
 
-**Line 1 (first 150 characters — most important):** One sentence stating clearly what this video is about, with the main keyword naturally included. This line appears in search results before "Show more" — it must be informative, not a teaser.
+DESCRIPTION:
+150–250 words. First sentence (≤150 characters): state clearly what this video is about, include the main keyword naturally — this line appears in search results before "Show more". Then 3–4 sentences covering the key insights or lessons in the video. End the description with 3–5 hashtags on the last line (language-native).
 
-**Lines 2–6:** 3–4 sentences expanding on the topic: the key questions the video answers, the insights or lessons covered. Write for someone who already clicked. Include secondary keywords naturally — no stuffing.
+HASHTAGS:
+The same 3–5 hashtags from the description, space-separated. Pick from channel keywords + video topic.
 
-**Last line:** 3–5 hashtags in **<<LANGUAGE>>** that match what people search for on this topic (e.g. #psychology #mentalhealth). Place hashtags only on this last line.
-
-Total: 150–250 words.
-
-Output the description only. No labels, no markdown.
+KEYWORDS:
+Comma-separated keyword phrases under 500 characters total. 8–15 phrases a viewer would search to find this video. Start from channel keywords, add specific terms from the title and content.

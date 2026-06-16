@@ -66,9 +66,11 @@ def run_one(job: dict, cfg: dict, api, write_sheet: bool) -> dict:
         return {"ok": False, "ma": job.get("ma"), "error": str(exc)}
 
     if write_sheet and result.get("ok"):
-        sheets.write_content(cfg["sheet"], result["ma"], result["script"],
-                             seo=result.get("seo", ""),
-                             log=lambda m: print(m, flush=True))
+        sheets.write_result(cfg["sheet"], result["ma"],
+                            seo=result.get("seo", ""),
+                            hashtags=result.get("hashtags", ""),
+                            seo_kw=result.get("seo_kw", ""),
+                            log=lambda m: print(m, flush=True))
     return result
 
 

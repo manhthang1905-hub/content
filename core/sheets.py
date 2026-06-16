@@ -87,6 +87,7 @@ def get_pending(sheet_cfg: dict, log=print) -> list[dict]:
                     "thumb": _cell(row, nc["thumb"]),
                     "link": _cell(row, nc["link"]),
                     "hook": _cell(row, nc.get("hook", -1)) if nc.get("hook", -1) >= 0 else "",
+                    "keywords": _cell(row, nc["keywords"]) if nc.get("keywords") is not None else "",
                 }
     except Exception as exc:  # noqa: BLE001
         log(f"[sheets] Không đọc được NGUON (bỏ qua): {exc}")
@@ -95,9 +96,8 @@ def get_pending(sheet_cfg: dict, log=print) -> list[dict]:
     for i, row in enumerate(rows[1:], start=2):
         ma = _cell(row, c["ma"])
         channel = _cell(row, c["channel"])
-        content = _cell(row, c["content"])
         seo = _cell(row, c["seo"])
-        if not ma or not channel or content or seo:
+        if not ma or not channel or seo:
             continue
         # Tính hợp lệ của kênh (có file cấu hình trong cây topics/) do run.py lọc
 
@@ -113,29 +113,12 @@ def get_pending(sheet_cfg: dict, log=print) -> list[dict]:
             "row": i, "ma": ma, "channel": channel,
             "title": title, "thumb": thumb, "link": link,
             "hook": info.get("hook", ""),
+            "keywords": info.get("keywords", ""),
         })
     return pending
 
 
 # ── Ghi kết quả ─────────────────────────────────────────────────────────────
-def _split_for_cells(content: str, limit: int = 49000) -> tuple[str, str, str]:
-    """Chia content cho vừa giới hạn ~50k ký tự/ô của Google Sheets."""
-    if len(content) <= limit:
-        return content, "", ""
-    third = len(content) // 3
-    sp1 = content.rfind("\n", 0, third + 2000)
-    sp1 = sp1 if sp1 != -1 and sp1 >= third - 2000 else third
-    part1, rest = content[:sp1].strip(), content[sp1:].strip()
-    if len(rest) <= limit:
-        return part1, rest, ""
-    sp2 = rest.rfind("\n", 0, len(rest) // 2 + 2000)
-    sp2 = sp2 if sp2 != -1 else len(rest) // 2
-    part2, part3 = rest[:sp2].strip(), rest[sp2:].strip()
-    if len(part3) > limit:
-        raise ValueError("Content quá dài kể cả sau khi chia 3 phần")
-    return part1, part2, part3
-
-
 def _write_title_thumb_to_nguon(ss, sheet_cfg: dict, ma: str, title: str = "", thumb: str = "", log=print) -> dict:
     if not title and not thumb:
         return {"status": "skipped", "ma": ma}
@@ -162,30 +145,32 @@ def write_title_thumb(sheet_cfg: dict, ma: str, title: str = "", thumb: str = ""
     return _write_title_thumb_to_nguon(ss, sheet_cfg, ma, title, thumb, log=log)
 
 
-def write_content(sheet_cfg: dict, ma: str, content: str, seo: str = "",
-                  title: str = "", thumb: str = "", log=print) -> dict:
-    """Ghi content/SEO vào INPUT theo MA."""
-
+def write_result(sheet_cfg: dict, ma: str, seo: str = "",
+                 hashtags: str = "", seo_kw: str = "", log=print) -> dict:
+    """Ghi seo description + hashtags + seo keywords vào INPUT theo MA."""
     c = sheet_cfg["columns"]
     ss = _open(sheet_cfg, log=log)
     inp = _retry("open INPUT", lambda: ss.worksheet(sheet_cfg["input_sheet"]), log=log)
     rows = _retry("read INPUT", lambda: inp.get_all_values(), log=log)
 
-    p1, p2, p3 = _split_for_cells(content)
     for i, row in enumerate(rows[1:], start=2):
         if _cell(row, c["ma"]) == ma:
-            _retry(f"write {ma} p1", lambda: inp.update_cell(i, c["content"] + 1, p1), log=log)
-            if p2:
-                _retry(f"write {ma} p2", lambda: inp.update_cell(i, c["content2"] + 1, p2), log=log)
-            if p3:
-                _retry(f"write {ma} p3", lambda: inp.update_cell(i, c["content3"] + 1, p3), log=log)
             if seo:
                 _retry(f"write {ma} seo", lambda: inp.update_cell(i, c["seo"] + 1, seo), log=log)
-            log(f"[sheets] Đã ghi content {ma} vào INPUT dòng {i} — {len(content):,} ký tự")
-            return {"status": "ok", "ma": ma, "row": i, "chars": len(content)}
+            if hashtags:
+                _retry(f"write {ma} hashtags", lambda: inp.update_cell(i, c["hashtags"] + 1, hashtags), log=log)
+            if seo_kw:
+                _retry(f"write {ma} seo_kw", lambda: inp.update_cell(i, c["seo_kw"] + 1, seo_kw), log=log)
+            log(f"[sheets] Đã ghi SEO {ma} vào INPUT dòng {i}")
+            return {"status": "ok", "ma": ma, "row": i}
 
     log(f"[sheets] Không tìm thấy dòng MA={ma} trên INPUT")
     return {"status": "error", "ma": ma, "message": "MA not found"}
+
+
+# giữ alias để không break code cũ
+def write_content(sheet_cfg, ma, content="", seo="", title="", thumb="", log=print):
+    return write_result(sheet_cfg, ma, seo=seo, log=log)
 
 
 def parse_video_id(link: str) -> str:
