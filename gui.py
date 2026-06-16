@@ -397,6 +397,8 @@ class ContentApp(tk.Tk):
         self.sys_btn.pack(side="right")
         self.drives_btn = self.btn(row2, "Drives", self.open_drive_config)
         self.drives_btn.pack(side="right", padx=(0, 8))
+        self.seo_btn = self.btn(row2, "SEO Backfill", self.run_seo_backfill)
+        self.seo_btn.pack(side="right", padx=(0, 6))
 
         # ── Row 3: badges + filter ───────────────────────────────
         row3 = tk.Frame(header, bg=TH["bg"])
@@ -583,6 +585,40 @@ class ContentApp(tk.Tk):
         _sp.Popen([exe, str(ROOT / "gui.py")])
         self.destroy()
 
+    def run_seo_backfill(self) -> None:
+        self.seo_btn.config(state="disabled", text="SEO...")
+        cfg = self.cfg.copy()
+
+        def worker():
+            try:
+                pending = sheets.get_seo_backfill_pending(cfg["sheet"],
+                                                          log=lambda m: self.log_q.put(("log", m)))
+                pending = [j for j in pending if pipeline.channel_exists(j["channel"], cfg)]
+                self.log_q.put(("log", f"[SEO] {len(pending)} rows se xu ly"))
+                api = api_mod.make_client(cfg, log_fn=lambda m: self.log_q.put(("log", m)))
+                ok = 0
+                for job in pending:
+                    try:
+                        result = pipeline.backfill_seo_job(
+                            job, cfg, api,
+                            log=lambda m, _ma=job["ma"]: self.log_q.put(("log", f"[{_ma}] {m}")),
+                        )
+                        if result.get("ok"):
+                            sheets.write_result(cfg["sheet"], result["ma"],
+                                                seo=result.get("seo", ""),
+                                                hashtags=result.get("hashtags", ""),
+                                                seo_kw=result.get("seo_kw", ""),
+                                                log=lambda m: self.log_q.put(("log", m)))
+                            ok += 1
+                    except Exception as exc:
+                        self.log_q.put(("log", f"[SEO] Loi {job['ma']}: {exc}"))
+                self.log_q.put(("log", f"[SEO] Hoan thanh: {ok}/{len(pending)}"))
+            except Exception as exc:
+                self.log_q.put(("log", f"[SEO] Loi: {exc}"))
+            self.after(0, lambda: self.seo_btn.config(state="normal", text="SEO Backfill"))
+
+        threading.Thread(target=worker, daemon=True).start()
+
     def open_drive_config(self) -> None:
         try:
             DriveConfigDialog(self)
@@ -743,6 +779,7 @@ class ContentApp(tk.Tk):
         self.backend_combo.config(state="disabled")
         self.check_btn.config(state="disabled")
         self.drives_btn.config(state="disabled")
+        self.seo_btn.config(state="disabled")
         n_workers = min(self.get_worker_count(), len(pending))
         queues = [pending[i::n_workers] for i in range(n_workers)]
         self.runners = []
@@ -785,6 +822,7 @@ class ContentApp(tk.Tk):
         self.backend_combo.config(state="readonly")
         self.check_btn.config(state="normal")
         self.drives_btn.config(state="normal")
+        self.seo_btn.config(state="normal")
         self.log("Đã yêu cầu dừng; job hiện tại sẽ dừng sau khi bước đang chạy kết thúc")
 
     def switch_log(self, ma: str) -> None:
@@ -926,6 +964,7 @@ class ContentApp(tk.Tk):
                     self.backend_combo.config(state="readonly")
                     self.check_btn.config(state="normal")
                     self.drives_btn.config(state="normal")
+                    self.seo_btn.config(state="normal")
                     if self.cycle_active and not self.stop_cycle:
                         self.schedule_next_cycle()
                     changed = True

@@ -118,6 +118,49 @@ def get_pending(sheet_cfg: dict, log=print) -> list[dict]:
     return pending
 
 
+# ── Backfill SEO: rows chưa đăng (AV trống hoặc EDIT XONG) ─────────────────
+def get_seo_backfill_pending(sheet_cfg: dict, log=print) -> list[dict]:
+    """Rows có status AV = 'EDIT XONG' hoặc trống — ghi đè SEO dù đã có hay chưa."""
+    c = sheet_cfg["columns"]
+    status_col = c.get("status", 47)
+    ss = _open(sheet_cfg, log=log)
+    inp = _retry("open INPUT", lambda: ss.worksheet(sheet_cfg["input_sheet"]), log=log)
+    rows = _retry("read INPUT", lambda: inp.get_all_values(), log=log)
+
+    nguon: dict[str, dict] = {}
+    try:
+        nsheet = _retry("open NGUON", lambda: ss.worksheet(sheet_cfg["nguon_sheet"]), log=log)
+        ndata = _retry("read NGUON", lambda: nsheet.get_all_values(), log=log)
+        nc = sheet_cfg["nguon_columns"]
+        for row in ndata[1:]:
+            ma = _cell(row, nc["ma"])
+            if ma:
+                nguon[ma] = {
+                    "keywords": _cell(row, nc["keywords"]) if nc.get("keywords") is not None else "",
+                }
+    except Exception as exc:  # noqa: BLE001
+        log(f"[sheets] Không đọc được NGUON: {exc}")
+
+    pending = []
+    for i, row in enumerate(rows[1:], start=2):
+        ma      = _cell(row, c["ma"])
+        channel = _cell(row, c["channel"])
+        title   = _cell(row, c["title"])
+        thumb   = _cell(row, c["thumb"])
+        status  = _cell(row, status_col).strip().upper()
+        if not ma or not channel or not title:
+            continue
+        if status and status != "EDIT XONG":
+            continue          # đã đăng hoặc trạng thái khác → bỏ qua
+        pending.append({
+            "row": i, "ma": ma, "channel": channel,
+            "title": title, "thumb": thumb,
+            "keywords": nguon.get(ma, {}).get("keywords", ""),
+        })
+    log(f"[sheets] Backfill SEO: {len(pending)} rows cần xử lý")
+    return pending
+
+
 # ── Ghi kết quả ─────────────────────────────────────────────────────────────
 def _write_title_thumb_to_nguon(ss, sheet_cfg: dict, ma: str, title: str = "", thumb: str = "", log=print) -> dict:
     if not title and not thumb:

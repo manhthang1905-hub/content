@@ -84,6 +84,8 @@ def main() -> None:
     ap.add_argument("--limit", type=int, default=0, help="Giới hạn số job khi --queue")
     ap.add_argument("--write-sheet", action="store_true",
                     help="Ghi kết quả lên Sheet (chế độ --link mặc định KHÔNG ghi)")
+    ap.add_argument("--backfill-seo", action="store_true",
+                    help="Tạo lại SEO/hashtag/keywords cho rows chưa đăng (AV trống hoặc EDIT XONG)")
     args = ap.parse_args()
 
     cfg = load_config()
@@ -121,7 +123,33 @@ def main() -> None:
         print(f"\n→ Hoàn tất: {ok}/{len(pending)} job thành công")
         sys.exit(0)
 
-    ap.error("Cần --link (test) hoặc --queue / --ma (chạy theo Sheet)")
+    # ── Backfill SEO ──
+    if args.backfill_seo:
+        print("[SEO] Đọc rows cần backfill...", flush=True)
+        pending = sheets.get_seo_backfill_pending(cfg["sheet"], log=lambda m: print(m, flush=True))
+        if args.limit and args.limit > 0:
+            pending = pending[: args.limit]
+        print(f"[SEO] {len(pending)} rows sẽ xử lý", flush=True)
+        ok = 0
+        for job in pending:
+            if not pipeline.channel_exists(job["channel"], cfg):
+                print(f"[SEO] Bỏ qua {job['ma']}: kênh {job['channel']} không có trong topic '{cfg['active_topic']}'", flush=True)
+                continue
+            try:
+                result = pipeline.backfill_seo_job(job, cfg, api, log=lambda m: print(m, flush=True))
+                if result.get("ok"):
+                    sheets.write_result(cfg["sheet"], result["ma"],
+                                        seo=result.get("seo", ""),
+                                        hashtags=result.get("hashtags", ""),
+                                        seo_kw=result.get("seo_kw", ""),
+                                        log=lambda m: print(m, flush=True))
+                    ok += 1
+            except Exception as exc:
+                print(f"[SEO] Lỗi {job['ma']}: {exc}", flush=True)
+        print(f"\n→ Hoàn tất SEO backfill: {ok}/{len(pending)} thành công")
+        sys.exit(0)
+
+    ap.error("Cần --link (test) hoặc --queue / --ma / --backfill-seo (chạy theo Sheet)")
 
 
 if __name__ == "__main__":

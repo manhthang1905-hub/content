@@ -57,6 +57,7 @@ sheet:
     seo: 35
     hashtags: 36
     seo_kw: 37
+    status: 47
   nguon_columns:
     ma: 6
     link: 1

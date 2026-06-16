@@ -317,6 +317,34 @@ def generate_seo_package(api, cfg, chan, title, thumb, channel_keywords, script,
     return pkg
 
 
+# ── Backfill SEO cho rows đã có title/thumb ───────────────────────────────────
+def backfill_seo_job(job: dict, cfg: dict, api, log=print) -> dict:
+    ma      = job["ma"]
+    channel = job["channel"]
+    title   = job.get("title", "")
+    thumb   = job.get("thumb", "")
+    keywords = job.get("keywords", "")
+
+    chan = load_channel(channel, cfg)
+
+    # Cố đọc script từ voice folder để làm context tốt hơn
+    script = ""
+    voice_dir = (
+        os.environ.get("CONTENT_VOICE_DIR")
+        or cfg.get("output", {}).get("voice_dir", "")
+    )
+    if voice_dir:
+        script_path = os.path.join(voice_dir, f"{ma}.txt")
+        try:
+            script = _read(script_path)
+        except Exception:
+            pass
+
+    log(f"[{ma}] SEO backfill — {title[:60]}" + (" (có script)" if script else ""))
+    pkg = generate_seo_package(api, cfg, chan, title, thumb, keywords, script, log)
+    return {"ok": True, "ma": ma, **pkg}
+
+
 # ── Job chính ─────────────────────────────────────────────────────────────────
 def run_job(job: dict, cfg: dict, api, log=print, on_title_thumb=None) -> dict:
     ma = job["ma"]
