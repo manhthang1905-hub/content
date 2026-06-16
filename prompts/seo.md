@@ -1,4 +1,4 @@
-# CREATE VIDEO DESCRIPTION
+# CREATE YOUTUBE VIDEO DESCRIPTION
 
 Title: **<<TITLE>>**
 
@@ -7,13 +7,16 @@ Script excerpt:
 
 ---
 
-Write a YouTube video description in **<<LANGUAGE>>**.
+Write a YouTube video description in **<<LANGUAGE>>** that helps the video rank in YouTube and Google search.
 
-Rules:
-- First 1-2 sentences: state clearly what this video is about — include the main topic keywords naturally. This part appears before "Show more" so it must be informative, not a teaser.
-- Next 3-4 sentences: the key insights, questions, or lessons the video covers. Help the viewer know exactly what they will learn.
-- End with 3-5 relevant hashtags on the last line (e.g. #psychology #mentalhealth).
-- Total length: 600-1000 characters.
-- Tone: natural, informative — written for someone who already clicked, not to convince them to click.
+Structure (follow exactly):
 
-Output the description only.
+**Line 1 (first 150 characters — most important):** One sentence stating clearly what this video is about, with the main keyword naturally included. This line appears in search results before "Show more" — it must be informative, not a teaser.
+
+**Lines 2–6:** 3–4 sentences expanding on the topic: the key questions the video answers, the insights or lessons covered. Write for someone who already clicked. Include secondary keywords naturally — no stuffing.
+
+**Last line:** 3–5 hashtags in **<<LANGUAGE>>** that match what people search for on this topic (e.g. #psychology #mentalhealth). Place hashtags only on this last line.
+
+Total: 150–250 words.
+
+Output the description only. No labels, no markdown.
