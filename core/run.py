@@ -86,9 +86,19 @@ def main() -> None:
                     help="Ghi kết quả lên Sheet (chế độ --link mặc định KHÔNG ghi)")
     ap.add_argument("--backfill-seo", action="store_true",
                     help="Tạo lại SEO/hashtag/keywords cho rows chưa đăng (AV trống hoặc EDIT XONG)")
+    ap.add_argument("--creds-file", help="Override creds JSON (vd: config/creds_mt.json)")
+    ap.add_argument("--sheet-name", help="Override tên spreadsheet (vd: MT)")
+    ap.add_argument("--topic", help="Override active topic (vd: success, tai-chinh)")
     args = ap.parse_args()
 
     cfg = load_config()
+    # Override config từ CLI flags (dùng cho multi-sheet backfill)
+    if args.creds_file:
+        cfg["sheet"]["creds_file"] = os.path.join(_ROOT, args.creds_file) if not os.path.isabs(args.creds_file) else args.creds_file
+    if args.sheet_name:
+        cfg["sheet"]["spreadsheet_name"] = args.sheet_name
+    if args.topic:
+        cfg["active_topic"] = args.topic
     api = make_api(cfg)
 
     # ── Chế độ test trực tiếp 1 link ──
@@ -127,6 +137,11 @@ def main() -> None:
     if args.backfill_seo:
         print("[SEO] Đọc rows cần backfill...", flush=True)
         pending = sheets.get_seo_backfill_pending(cfg["sheet"], log=lambda m: print(m, flush=True))
+        # Chỉ xử lý kênh có file cấu hình — giống logic --queue
+        skipped = [j for j in pending if not pipeline.channel_exists(j["channel"], cfg)]
+        pending = [j for j in pending if pipeline.channel_exists(j["channel"], cfg)]
+        if skipped:
+            print(f"[SEO] Bỏ qua {len(skipped)} rows không có file kênh trong topic '{cfg['active_topic']}'", flush=True)
         if args.limit and args.limit > 0:
             pending = pending[: args.limit]
         print(f"[SEO] {len(pending)} rows sẽ xử lý", flush=True)

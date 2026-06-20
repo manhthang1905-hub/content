@@ -327,29 +327,36 @@ _LANG_NAMES = {
 def _load_channel_for_seo(channel_id: str, cfg: dict) -> dict:
     """Load channel; nếu không có file kênh thì dùng ngôn ngữ từ mã T1..T10."""
     try:
-        return load_channel(channel_id, cfg)
+        ch = load_channel(channel_id, cfg)
+        ch["_inferred"] = False
+        return ch
     except Exception:
         pass
     try:
-        _, lang_num = channel_id.split("-")
+        parts = channel_id.split("-")
+        lang_num = parts[-1]  # lấy phần cuối ("T2" từ "KA2-T2")
         lang_code = cfg["languages"].get(lang_num, "en")
         lang_name = _LANG_NAMES.get(lang_code, lang_code)
         return {"id": channel_id, "lang_code": lang_code,
-                "language": lang_name, "channel": "", "thumb_case": "upper"}
+                "language": lang_name, "channel": "", "thumb_case": "upper",
+                "_inferred": True}
     except Exception:
         return {"id": channel_id, "lang_code": "en",
-                "language": "English", "channel": "", "thumb_case": "upper"}
+                "language": "English", "channel": "", "thumb_case": "upper",
+                "_inferred": True}
 
 
 # ── Backfill SEO cho rows đã có title/thumb ───────────────────────────────────
 def backfill_seo_job(job: dict, cfg: dict, api, log=print) -> dict:
+    """Tạo SEO cho 1 row. Channel phải có file cấu hình (đã lọc bởi channel_exists)."""
     ma      = job["ma"]
     channel = job["channel"]
     title   = job.get("title", "")
     thumb   = job.get("thumb", "")
     keywords = job.get("keywords", "")
 
-    chan = _load_channel_for_seo(channel, cfg)
+    # Cùng logic với run_job: load_channel() → ngôn ngữ từ TLx.md
+    chan = load_channel(channel, cfg)
 
     # Cố đọc script từ voice folder để làm context tốt hơn
     script = ""
@@ -364,7 +371,8 @@ def backfill_seo_job(job: dict, cfg: dict, api, log=print) -> dict:
         except Exception:
             pass
 
-    log(f"[{ma}] SEO backfill — {title[:60]}" + (" (có script)" if script else ""))
+    log(f"[{ma}] SEO backfill — {title[:60]} [{chan['language']}]"
+        + (" (có script)" if script else ""))
     pkg = generate_seo_package(api, cfg, chan, title, thumb, keywords, script, log)
     return {"ok": True, "ma": ma, **pkg}
 

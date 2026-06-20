@@ -52,7 +52,8 @@ def _retry(label: str, func, attempts: int = 8, base_delay: float = 2.0, log=pri
 
 # ── Kết nối ─────────────────────────────────────────────────────────────────
 def _open(sheet_cfg: dict, log=print):
-    creds = ServiceAccountCredentials.from_json_keyfile_name(CREDS_FILE, _SCOPE)
+    creds_path = sheet_cfg.get("creds_file") or CREDS_FILE
+    creds = ServiceAccountCredentials.from_json_keyfile_name(creds_path, _SCOPE)
     client = _retry("authorize", lambda: gspread.authorize(creds), log=log)
     name = sheet_cfg["spreadsheet_name"]
     return _retry(f"open {name}", lambda: client.open(name), log=log)
@@ -196,14 +197,18 @@ def write_result(sheet_cfg: dict, ma: str, seo: str = "",
     inp = _retry("open INPUT", lambda: ss.worksheet(sheet_cfg["input_sheet"]), log=log)
     rows = _retry("read INPUT", lambda: inp.get_all_values(), log=log)
 
+    # Hỗ trợ cả tên cột mới (hashtags/seo_kw) lẫn tên cũ (content2/content3)
+    col_hashtags = c.get("hashtags", c.get("content2"))
+    col_seo_kw   = c.get("seo_kw",   c.get("content3"))
+
     for i, row in enumerate(rows[1:], start=2):
         if _cell(row, c["ma"]) == ma:
             if seo:
                 _retry(f"write {ma} seo", lambda: inp.update_cell(i, c["seo"] + 1, seo), log=log)
-            if hashtags:
-                _retry(f"write {ma} hashtags", lambda: inp.update_cell(i, c["hashtags"] + 1, hashtags), log=log)
-            if seo_kw:
-                _retry(f"write {ma} seo_kw", lambda: inp.update_cell(i, c["seo_kw"] + 1, seo_kw), log=log)
+            if hashtags and col_hashtags is not None:
+                _retry(f"write {ma} hashtags", lambda: inp.update_cell(i, col_hashtags + 1, hashtags), log=log)
+            if seo_kw and col_seo_kw is not None:
+                _retry(f"write {ma} seo_kw", lambda: inp.update_cell(i, col_seo_kw + 1, seo_kw), log=log)
             log(f"[sheets] Đã ghi SEO {ma} vào INPUT dòng {i}")
             return {"status": "ok", "ma": ma, "row": i}
 
