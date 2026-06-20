@@ -583,36 +583,6 @@ class ContentApp(tk.Tk):
         _sp.Popen([exe, str(ROOT / "gui.py")])
         self.destroy()
 
-    def run_seo_backfill(self) -> None:
-        self.seo_btn.config(state="disabled", text="SEO...")
-        cfg = self.cfg.copy()
-
-        def worker():
-            try:
-                pending = sheets.get_seo_backfill_pending(cfg["sheet"],
-                                                          log=lambda m: self.log_q.put(("log", m)))
-                pending = [j for j in pending if pipeline.channel_exists(j["channel"], cfg)]
-                self.log_q.put(("log", f"[SEO] {len(pending)} rows se xu ly"))
-                api = api_mod.make_client(cfg, log_fn=lambda m: self.log_q.put(("log", m)))
-                ok = 0
-                for job in pending:
-                    try:
-                        result = pipeline.backfill_seo_job(
-                            job, cfg, api,
-                            log=lambda m, _ma=job["ma"]: self.log_q.put(("log", f"[{_ma}] {m}")),
-                        )
-                        if result.get("ok"):
-                            sheets.write_result(cfg["sheet"], result["ma"],
-                                                seo=result.get("seo", ""),
-                                                hashtags=result.get("hashtags", ""),
-                                                seo_kw=result.get("seo_kw", ""),
-                                                log=lambda m: self.log_q.put(("log", m)))
-                            ok += 1
-                    except Exception as exc:
-                        self.log_q.put(("log", f"[SEO] Loi {job['ma']}: {exc}"))
-                self.log_q.put(("log", f"[SEO] Hoan thanh: {ok}/{len(pending)}"))
-            except Exception as exc:
-                self.log_q.put(("log", f"[SEO] Loi: {exc}"))
     def open_drive_config(self) -> None:
         try:
             DriveConfigDialog(self)
@@ -956,9 +926,9 @@ class ContentApp(tk.Tk):
                     self.backend_combo.config(state="readonly")
                     self.check_btn.config(state="normal")
                     self.drives_btn.config(state="normal")
-                    self.seo_btn.config(state="normal")
                     if self.cycle_active and not self.stop_cycle:
-                        self.schedule_next_cycle()
+                        # Sync ngay để lấy job mới; nếu không có job mới thì mới đợi 30 phút
+                        self.after(2000, lambda: self.load_jobs(auto_cycle=True))
                     changed = True
             elif kind == "sync_done":
                 self.sync_btn.config(state="normal")
