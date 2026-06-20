@@ -121,9 +121,10 @@ def get_pending(sheet_cfg: dict, log=print) -> list[dict]:
 
 # ── Backfill SEO: rows chưa đăng (AV trống hoặc EDIT XONG) ─────────────────
 def get_seo_backfill_pending(sheet_cfg: dict, log=print) -> list[dict]:
-    """Rows có status AV = 'EDIT XONG' hoặc trống — ghi đè SEO dù đã có hay chưa."""
+    """Rows status trống hoặc EDIT XONG mà chưa có hashtags (phát sinh từ lỗi write cũ)."""
     c = sheet_cfg["columns"]
-    status_col = c.get("status", 47)
+    status_col   = c.get("status", 47)
+    hashtags_col = c.get("hashtags") if c.get("hashtags") is not None else c.get("content2")
     ss = _open(sheet_cfg, log=log)
     inp = _retry("open INPUT", lambda: ss.worksheet(sheet_cfg["input_sheet"]), log=log)
     rows = _retry("read INPUT", lambda: inp.get_all_values(), log=log)
@@ -152,7 +153,9 @@ def get_seo_backfill_pending(sheet_cfg: dict, log=print) -> list[dict]:
         if not ma or not channel or not title:
             continue
         if status and status != "EDIT XONG":
-            continue          # đã đăng hoặc trạng thái khác → bỏ qua
+            continue  # chỉ lấy trống hoặc EDIT XONG
+        if hashtags_col is not None and _cell(row, hashtags_col):
+            continue  # đã có hashtag rồi → bỏ qua
         pending.append({
             "row": i, "ma": ma, "channel": channel,
             "title": title, "thumb": thumb,
