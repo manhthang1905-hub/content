@@ -718,11 +718,12 @@ class CliApiClient:
     Model mac dinh: claude-opus-4-8 (Max 20x).
     """
 
-    _MAX_RETRIES = 3
-    _RETRY_DELAY = 10   # seconds, tang dan theo attempt
+    _MAX_RETRIES = 999999  # retry indefinitely — never break the pipeline
+    _RETRY_DELAY = 10   # seconds, tang dan theo attempt (capped at 60s)
     _TIMEOUT     = 300  # seconds per call
 
-    _QUOTA_MARKERS = ("rate limit", "too many requests", "usage limit", "quota", "overloaded", "529")
+    _QUOTA_MARKERS = ("rate limit", "too many requests", "usage limit", "quota", "overloaded", "529",
+                      "session limit")
 
     def __init__(
         self,
@@ -816,7 +817,7 @@ class CliApiClient:
                 self._log(f"[CLI] {stage} attempt {attempt} failed ({elapsed:.1f}s): {e}")
 
             if attempt < self._MAX_RETRIES:
-                wait = self._RETRY_DELAY * attempt
+                wait = min(self._RETRY_DELAY * attempt, 60)  # cap 60s
                 self._log(f"[CLI] Waiting {wait}s before retry...")
                 if self.stop_event:
                     if self.stop_event.wait(wait):

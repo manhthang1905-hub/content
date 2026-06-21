@@ -10,6 +10,8 @@ This is a viral script. Rewrite it in **<<LANGUAGE>>** matching: structure, cont
 
 ---
 
+Localize for that country's audience — not a literal translation.
+
 Reminder: match **structure, content, tone, emotion** — do not copy — language: **<<LANGUAGE>>**.
 
 Output the voiceover lines only.

@@ -125,6 +125,7 @@ def get_seo_backfill_pending(sheet_cfg: dict, log=print) -> list[dict]:
     c = sheet_cfg["columns"]
     status_col   = c.get("status", 47)
     hashtags_col = c.get("hashtags") if c.get("hashtags") is not None else c.get("content2")
+    seo_kw_col   = c.get("seo_kw")   if c.get("seo_kw")   is not None else c.get("content3")
     ss = _open(sheet_cfg, log=log)
     inp = _retry("open INPUT", lambda: ss.worksheet(sheet_cfg["input_sheet"]), log=log)
     rows = _retry("read INPUT", lambda: inp.get_all_values(), log=log)
@@ -154,8 +155,10 @@ def get_seo_backfill_pending(sheet_cfg: dict, log=print) -> list[dict]:
             continue
         if status and status != "EDIT XONG":
             continue  # chỉ lấy trống hoặc EDIT XONG
-        if hashtags_col is not None and _cell(row, hashtags_col):
-            continue  # đã có hashtag rồi → bỏ qua
+        has_ht = hashtags_col is not None and _cell(row, hashtags_col)
+        has_kw = seo_kw_col   is not None and _cell(row, seo_kw_col)
+        if has_ht and has_kw:
+            continue  # đã có đủ hashtag + seo_kw → bỏ qua
         pending.append({
             "row": i, "ma": ma, "channel": channel,
             "title": title, "thumb": thumb,
