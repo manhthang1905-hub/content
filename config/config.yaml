@@ -19,6 +19,21 @@ languages:
   T9: it        # Ý
   T10: tr       # Thổ Nhĩ Kỳ
 
+# ── Ký tự / phút theo ngôn ngữ (trung vị từ 48 cặp TXT+MP3 thật trong voice/voice) ──
+# Dùng để quy target_minutes (frontmatter TLx.md) → số ký tự mục tiêu cho prompt adapt.
+# Đo lại bằng output/measure_cpm3.py khi đổi giọng voice (quét đệ quy, gom mọi cặp txt+mp3).
+chars_per_min:
+  es: 973
+  vi: 832
+  en: 920
+  fr: 1048
+  de: 895
+  pt: 935
+  ja: 341
+  ko: 445
+  it: 875
+  tr: 766
+
 # ── API backend ──────────────────────────────────────────────────────────────
 # http: dung routerapi (ANTHROPIC_API_KEY trong .env) — mac dinh
 # cli:  dung claude CLI (da dang nhap Max 20x) — chat luong cao hon voi Opus

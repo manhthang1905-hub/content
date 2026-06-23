@@ -193,7 +193,20 @@ def load_channel(channel_id: str, cfg: dict) -> dict:
         "channel": body.strip(),
         "thumb_case": fm.get("thumb_case", "upper"),
         "title_thumb_mode": fm.get("title_thumb", "restyled"),
+        "target_minutes": fm.get("target_minutes", 0),
     }
+
+
+def target_chars_for(chan: dict, cfg: dict) -> int:
+    """Số ký tự mục tiêu = target_minutes × cpm[ngôn ngữ]. 0 nếu kênh không khai báo."""
+    try:
+        minutes = float(chan.get("target_minutes", 0) or 0)
+    except (TypeError, ValueError):
+        minutes = 0
+    if minutes <= 0:
+        return 0
+    cpm = cfg.get("chars_per_min", {}).get(chan.get("lang_code", ""), 0)
+    return round(minutes * cpm) if cpm else 0
 
 
 # ── Tiêu đề + text thumb ─────────────────────────────────────────────────────
@@ -262,6 +275,47 @@ def check_fix_oneshot(api, cfg, chan, transcript, draft, log) -> str:
             "LANGUAGE": chan["language"],
             "CHANNEL": chan["channel"],
             "COMPETITOR_TRANSCRIPT": transcript,
+            "DRAFT": draft,
+        }),
+        model=cfg["models"]["check"],
+        temperature=0.5,
+        max_tokens=16000,
+    )
+    text = clean_voice_text(resp.text, blank_line_between_paragraphs=cfg["output"]["blank_line_between_paragraphs"])
+    log(f"      {count_chars(text):,} ký tự")
+    return text
+
+
+# ── Adapt + Review (chỉ chạy khi kênh có target_minutes) ─────────────────────
+def adapt_oneshot(api, cfg, chan, draft, target_chars, log) -> str:
+    log(f"[adapt] Chỉnh về ~{target_chars:,} ký tự cho khán giả...")
+    resp = api.call(
+        stage="check",
+        system="You refine viral voiceover scripts. Output the script only — no commentary.",
+        user_message=render(load_prompt("adapt.md"), {
+            "LANGUAGE": chan["language"],
+            "CHANNEL": chan["channel"],
+            "CHARS": target_chars,
+            "DRAFT": draft,
+        }),
+        model=cfg["models"]["check"],
+        temperature=0.6,
+        max_tokens=16000,
+    )
+    text = clean_voice_text(resp.text, blank_line_between_paragraphs=cfg["output"]["blank_line_between_paragraphs"])
+    log(f"      {count_chars(text):,} ký tự")
+    return text
+
+
+def review_oneshot(api, cfg, chan, draft, target_chars, log) -> str:
+    log("[review] Trau chuốt + giữ ký tự...")
+    resp = api.call(
+        stage="check",
+        system="You polish viral voiceover scripts. Output the script only — no commentary.",
+        user_message=render(load_prompt("review.md"), {
+            "LANGUAGE": chan["language"],
+            "CHANNEL": chan["channel"],
+            "CHARS": target_chars,
             "DRAFT": draft,
         }),
         model=cfg["models"]["check"],
@@ -404,7 +458,14 @@ def run_job(job: dict, cfg: dict, api, log=print, on_title_thumb=None) -> dict:
         on_title_thumb(ma, title, thumb)
 
     draft = write_oneshot(api, cfg, chan, transcript, title, log)
-    final = check_fix_oneshot(api, cfg, chan, transcript, draft, log)
+    target_chars = target_chars_for(chan, cfg)
+    if target_chars:
+        # Kênh có target độ dài: write → adapt (ép ký tự) → review (giữ ký tự)
+        draft = adapt_oneshot(api, cfg, chan, draft, target_chars, log)
+        final = review_oneshot(api, cfg, chan, draft, target_chars, log)
+    else:
+        # Kênh không khai target: giữ nguyên luồng cũ (write → check_fix)
+        final = check_fix_oneshot(api, cfg, chan, transcript, draft, log)
     final = clean_voice_text(final, blank_line_between_paragraphs=cfg["output"]["blank_line_between_paragraphs"])
 
     seo_pkg = generate_seo_package(

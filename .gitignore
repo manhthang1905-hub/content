@@ -8,6 +8,9 @@ output/
 # Bí mật — mỗi máy có file riêng, KHÔNG đưa lên GitHub
 config/.env
 config/creds.json
+config/creds_mt.json
+config/creds_th.json
+config/creds_*.json
 api_keys.json
 
 # Log tạm
