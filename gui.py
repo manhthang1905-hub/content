@@ -93,7 +93,8 @@ def load_config() -> dict:
 def _get_version() -> str:
     try:
         import subprocess as _sp
-        r = _sp.run(["git", "rev-parse", "--short", "HEAD"],
+        # Số commit = số tăng dần, mỗi lần pull về commit mới là tự tăng
+        r = _sp.run(["git", "rev-list", "--count", "HEAD"],
                     capture_output=True, text=True, cwd=str(ROOT), timeout=3)
         v = r.stdout.strip()
         if v:
@@ -529,12 +530,25 @@ class ContentApp(tk.Tk):
         def _via_git() -> str:
             import shutil as _sh, subprocess as _sp
             _sp.run(["git", "--version"], capture_output=True, check=True, timeout=5)
+            # Cất tạm thay đổi local (vd active_topic trong config.yaml) để pull không bị chặn
+            st = _sp.run(["git", "stash", "push", "-m", "auto-update"],
+                         capture_output=True, text=True, cwd=str(ROOT), timeout=30)
+            stashed = "No local changes" not in (st.stdout + st.stderr)
             r = _sp.run(
                 ["git", "pull"], capture_output=True, text=True, cwd=str(ROOT), timeout=60,
             )
+            out = (r.stdout or r.stderr or "").strip()
+            if stashed:
+                # Trả lại thay đổi local (active_topic của máy này) lên code mới
+                pop = _sp.run(["git", "stash", "pop"], capture_output=True, text=True,
+                              cwd=str(ROOT), timeout=30)
+                if pop.returncode == 0:
+                    out += "\n[Update] da giu lai cau hinh local (active_topic)"
+                else:
+                    out += "\n[Update] CANH BAO: khong tra lai duoc config local: " + (pop.stderr or "")[:150]
             for cache in ROOT.rglob("__pycache__"):
                 _sh.rmtree(cache, ignore_errors=True)
-            return (r.stdout or r.stderr or "").strip()
+            return out
 
         def _via_zip() -> str:
             import shutil, tempfile, urllib.request, zipfile
