@@ -299,23 +299,37 @@ def check_fix_oneshot(api, cfg, chan, transcript, draft, log) -> str:
 
 # ── Adapt + Review (chỉ chạy khi kênh có target_minutes) ─────────────────────
 def adapt_oneshot(api, cfg, chan, draft, target_chars, log) -> str:
-    log(f"[adapt] Chỉnh về ~{target_chars:,} ký tự cho khán giả...")
-    resp = api.call(
-        stage="check",
-        system="You refine viral voiceover scripts. Output the script only — no commentary.",
-        user_message=render(load_prompt("adapt.md"), {
-            "LANGUAGE": chan["language"],
-            "CHANNEL": chan["channel"],
-            "CHARS": target_chars,
-            "DRAFT": draft,
-        }),
-        model=cfg["models"]["check"],
-        temperature=0.6,
-        max_tokens=16000,
-    )
-    text = clean_voice_text(resp.text, blank_line_between_paragraphs=cfg["output"]["blank_line_between_paragraphs"])
-    log(f"      {count_chars(text):,} ký tự")
-    return text
+    # LLM không đếm được ký tự khi viết, lại VƯỢT số khai với tỉ lệ DAO ĐỘNG MẠNH (~1.2-1.8×).
+    # Nên: vòng phản hồi — khai thấp hơn target để bù, đo thực tế, chưa đạt thì chỉnh số khai
+    # (CÓ KẸP BIÊN chống dao động) rồi chạy lại trên BẢN GỐC. Cuối cùng giữ bản GẦN target nhất.
+    tmpl = load_prompt("adapt.md")
+    lo, hi = target_chars * 0.8, target_chars * 1.25
+    aim = int(target_chars * 0.85)            # khai thấp để bù phần model vượt
+    best, best_gap = draft, abs(count_chars(draft) - target_chars)
+    for attempt in range(1, 4):
+        resp = api.call(
+            stage="check",
+            system="You refine viral voiceover scripts. Output the script only — no commentary.",
+            user_message=render(tmpl, {
+                "LANGUAGE": chan["language"],
+                "CHANNEL": chan["channel"],
+                "CHARS": aim,
+                "DRAFT": draft,
+            }),
+            model=cfg["models"]["check"],
+            temperature=0.6,
+            max_tokens=16000,
+        )
+        result = clean_voice_text(resp.text, blank_line_between_paragraphs=cfg["output"]["blank_line_between_paragraphs"])
+        n = count_chars(result)
+        log(f"[adapt {attempt}] khai {aim:,} → {n:,} ký tự (target {target_chars:,})")
+        if abs(n - target_chars) < best_gap:
+            best, best_gap = result, abs(n - target_chars)
+        if lo <= n <= hi:
+            return result
+        ratio = min(1.5, max(0.65, target_chars / max(1, n)))   # giảm chấn, chống nhảy 17k→5k
+        aim = int(max(target_chars * 0.3, min(target_chars, aim * ratio)))
+    return best
 
 
 def review_oneshot(api, cfg, chan, draft, target_chars, log) -> str:
