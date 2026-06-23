@@ -197,6 +197,15 @@ def load_channel(channel_id: str, cfg: dict) -> dict:
     }
 
 
+# cpm mặc định (đo từ TXT+MP3 thật bên tam-ly). Để TRONG code vì cơ chế Update bỏ qua
+# thư mục config/ (giữ active_topic + creds mỗi máy) — nếu để trong config.yaml thì VM khác
+# không bao giờ nhận được bảng này. config.yaml chỉ là override tùy chọn.
+DEFAULT_CHARS_PER_MIN = {
+    "es": 973, "vi": 832, "en": 920, "fr": 1048, "de": 895,
+    "pt": 935, "ja": 341, "ko": 445, "it": 875, "tr": 766,
+}
+
+
 def target_chars_for(chan: dict, cfg: dict) -> int:
     """Số ký tự mục tiêu = target_minutes × cpm[ngôn ngữ]. 0 nếu kênh không khai báo."""
     try:
@@ -205,7 +214,9 @@ def target_chars_for(chan: dict, cfg: dict) -> int:
         minutes = 0
     if minutes <= 0:
         return 0
-    cpm = cfg.get("chars_per_min", {}).get(chan.get("lang_code", ""), 0)
+    lang = chan.get("lang_code", "")
+    # Ưu tiên config.yaml (nếu máy có), thiếu thì dùng bảng mặc định trong code
+    cpm = (cfg.get("chars_per_min") or {}).get(lang) or DEFAULT_CHARS_PER_MIN.get(lang, 0)
     return round(minutes * cpm) if cpm else 0
 
 
