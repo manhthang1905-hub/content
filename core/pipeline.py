@@ -299,12 +299,13 @@ def check_fix_oneshot(api, cfg, chan, transcript, draft, log) -> str:
 
 # ── Adapt + Review (chỉ chạy khi kênh có target_minutes) ─────────────────────
 def adapt_oneshot(api, cfg, chan, draft, target_chars, log) -> str:
-    # LLM không đếm được ký tự khi viết, lại VƯỢT số khai với tỉ lệ DAO ĐỘNG MẠNH (~1.2-1.8×).
-    # Nên: vòng phản hồi — khai thấp hơn target để bù, đo thực tế, chưa đạt thì chỉnh số khai
-    # (CÓ KẸP BIÊN chống dao động) rồi chạy lại trên BẢN GỐC. Cuối cùng giữ bản GẦN target nhất.
+    # LLM không đếm được ký tự khi viết, lại VƯỢT/HỤT số khai với tỉ lệ dao động. Nên vòng
+    # phản hồi: lần đầu khai ĐÚNG target; đo thực tế; THỪA thì giảm số khai, THIẾU thì tăng —
+    # có GIẢM CHẤN để khỏi dao động (full tỉ lệ từng nhảy 17k→5k). Tối đa 3 lượt, mỗi lượt chạy
+    # lại trên BẢN GỐC, cuối cùng giữ bản GẦN target nhất. Không số "đoán" cứng → hợp mọi nguồn.
     tmpl = load_prompt("adapt.md")
-    lo, hi = target_chars * 0.8, target_chars * 1.25
-    aim = int(target_chars * 0.85)            # khai thấp để bù phần model vượt
+    lo, hi = target_chars * 0.75, target_chars * 1.25        # trong ±25% là đạt, dừng luôn
+    aim = target_chars                                        # lần đầu: khai đúng target (1×)
     best, best_gap = draft, abs(count_chars(draft) - target_chars)
     for attempt in range(1, 4):
         resp = api.call(
@@ -327,8 +328,9 @@ def adapt_oneshot(api, cfg, chan, draft, target_chars, log) -> str:
             best, best_gap = result, abs(n - target_chars)
         if lo <= n <= hi:
             return result
-        ratio = min(1.5, max(0.65, target_chars / max(1, n)))   # giảm chấn, chống nhảy 17k→5k
-        aim = int(max(target_chars * 0.3, min(target_chars, aim * ratio)))
+        # chỉnh số khai về phía cần, GIẢM CHẤN bằng mũ 0.6 (vì output siêu tuyến tính theo aim)
+        factor = (target_chars / max(1, n)) ** 0.6
+        aim = int(max(target_chars * 0.3, min(target_chars * 1.5, aim * factor)))
     return best
 
 
