@@ -91,9 +91,16 @@ def load_config() -> dict:
 
 
 def _get_version() -> str:
+    # version.txt được hook tự đóng dấu mỗi commit, đi theo cả git lẫn ZIP → nguồn chuẩn nhất
+    # (đọc trước git để VM không-git / cập nhật qua ZIP vẫn thấy số đúng)
+    try:
+        v = (ROOT / "version.txt").read_text(encoding="utf-8").strip()
+        if v:
+            return v
+    except Exception:
+        pass
     try:
         import subprocess as _sp
-        # Số commit = số tăng dần, mỗi lần pull về commit mới là tự tăng
         r = _sp.run(["git", "rev-list", "--count", "HEAD"],
                     capture_output=True, text=True, cwd=str(ROOT), timeout=3)
         v = r.stdout.strip()
@@ -101,10 +108,7 @@ def _get_version() -> str:
             return v
     except Exception:
         pass
-    try:
-        return (ROOT / "version.txt").read_text(encoding="utf-8").strip()
-    except Exception:
-        return "dev"
+    return "dev"
 
 
 def _patch_yaml_key(key: str, value: str) -> None:
@@ -539,13 +543,12 @@ class ContentApp(tk.Tk):
             )
             out = (r.stdout or r.stderr or "").strip()
             if stashed:
-                # Trả lại thay đổi local (active_topic của máy này) lên code mới
-                pop = _sp.run(["git", "stash", "pop"], capture_output=True, text=True,
-                              cwd=str(ROOT), timeout=30)
-                if pop.returncode == 0:
-                    out += "\n[Update] da giu lai cau hinh local (active_topic)"
-                else:
-                    out += "\n[Update] CANH BAO: khong tra lai duoc config local: " + (pop.stderr or "")[:150]
+                # Luôn trả lại thay đổi local (active_topic của máy này), kể cả khi pull lỗi
+                _sp.run(["git", "stash", "pop"], capture_output=True, text=True,
+                        cwd=str(ROOT), timeout=30)
+            # Pull lỗi (vd repo không phải git, conflict) -> raise để rơi sang ZIP
+            if r.returncode != 0:
+                raise RuntimeError("git pull that bai: " + out[:200])
             for cache in ROOT.rglob("__pycache__"):
                 _sh.rmtree(cache, ignore_errors=True)
             return out
