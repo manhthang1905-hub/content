@@ -459,6 +459,7 @@ def method4_whisper(video_id: str, url: str) -> tuple:
 
         # ── Step C: Transcribe — local whisper preferred (no API key needed) ──
         log(f"Whisper [B]: transcribing ({file_size_mb:.1f} MB, lang={lang_hint})...")
+        local_err = None  # giữ lỗi gốc của whisper local để báo ra (không nuốt)
         with _WHISPER_LOCK:  # serialise — chỉ 1 job dùng Whisper cùng lúc (RAM)
             try:
                 import whisper as _whisper
@@ -469,15 +470,22 @@ def method4_whisper(video_id: str, url: str) -> tuple:
                 word_count = len(text.split())
                 log(f"Whisper [B]: local SUCCESS — {word_count} words")
                 return text, f'{lang_hint} (whisper-local-small)'
-            except ImportError:
-                log("  local whisper not available, fallback to API...")
+            except ImportError as _e:
+                local_err = f"import whisper lỗi: {type(_e).__name__}: {_e}"
+                log(f"  {local_err} — fallback to API...")
             except Exception as _e:
-                log(f"  local whisper failed: {_e}, fallback to API...")
+                local_err = f"whisper local lỗi: {type(_e).__name__}: {_e}"
+                log(f"  {local_err} — fallback to API...")
 
         # ── Fallback: OpenAI Whisper API ──
         api_key = OPENAI_API_KEY
         if not api_key:
-            raise RuntimeError("Cần OPENAI_API_KEY hoặc pip install openai-whisper")
+            # Lộ lỗi gốc của whisper local thay vì câu chung chung "pip install"
+            raise RuntimeError(
+                f"Whisper local thất bại [{local_err}] và không có OPENAI_API_KEY để fallback API"
+                if local_err else
+                "Cần OPENAI_API_KEY hoặc pip install openai-whisper"
+            )
         log(f"  dùng Whisper API ({OPENAI_API_BASE})...")
 
         # Determine MIME type

@@ -73,7 +73,7 @@ Write-Host "  OK: Tat ca packages da cai" -ForegroundColor Green
 # ------ 4b. Kiem tra import that su (bat loi cai am tham) ------------------------------------------
 Write-Host "`n[4b] Kiem tra dependencies (Method 1-4)..." -ForegroundColor Yellow
 $pycheck = @"
-import importlib.util as u
+import importlib
 mods = [
  ('youtube_transcript_api','Method 1 (sub san co)'),
  ('yt_dlp','Method 2 (yt-dlp sub)'),
@@ -81,8 +81,11 @@ mods = [
  ('whisper','Method 4 (mp3 -> Whisper) = PHAO CUOI'),
 ]
 for m,desc in mods:
-    ok = u.find_spec(m) is not None
-    print(('OK   ' if ok else 'THIEU') + ' | ' + m + ' -> ' + desc)
+    try:
+        importlib.import_module(m)   # import THAT su, bat loi ABI (numpy/torch)
+        print('OK    | ' + m + ' -> ' + desc)
+    except Exception as e:
+        print('THIEU | ' + m + ' -> ' + desc + '  [' + type(e).__name__ + ': ' + str(e)[:80] + ']')
 "@
 $checkOut = $pycheck | python -
 foreach ($line in $checkOut) {
