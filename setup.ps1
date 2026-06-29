@@ -51,6 +51,29 @@ try {
     Write-Host "  Giai nen -> copy ffmpeg.exe vao C:\Windows\System32\"
 }
 
+# ------ 3b. Microsoft Visual C++ Redistributable (torch/whisper load DLL nay) -------------------
+# Thieu cai nay -> import torch/whisper bao WinError 126 "module could not be found" -> Method 4 chet.
+Write-Host "`n[3b] Kiem tra Visual C++ Redistributable (torch can)..." -ForegroundColor Yellow
+$vcInstalled = $false
+try {
+    $vc = Get-ItemProperty "HKLM:\SOFTWARE\Microsoft\VisualStudio\14.0\VC\Runtimes\x64" -ErrorAction Stop
+    if ($vc.Installed -eq 1) { $vcInstalled = $true }
+} catch {}
+if ($vcInstalled) {
+    Write-Host "  OK: Da cai VC++ Redistributable" -ForegroundColor Green
+} else {
+    Write-Host "  Chua co -> tai + cai vc_redist.x64.exe (im lang)..." -ForegroundColor Yellow
+    try {
+        $vcExe = Join-Path $env:TEMP "vc_redist.x64.exe"
+        Invoke-WebRequest -Uri "https://aka.ms/vs/17/release/vc_redist.x64.exe" -OutFile $vcExe -UseBasicParsing
+        Start-Process -FilePath $vcExe -ArgumentList "/install","/quiet","/norestart" -Wait
+        Write-Host "  OK: Da cai VC++ Redistributable" -ForegroundColor Green
+    } catch {
+        Write-Host "  LOI tai/cai VC++: $_" -ForegroundColor Red
+        Write-Host "  Tai tay: https://aka.ms/vs/17/release/vc_redist.x64.exe" -ForegroundColor Yellow
+    }
+}
+
 # ------ 4. Cai Python packages ------------------------------------------------------------------------------------------------------------------------------------------------------------
 Write-Host "`n[4/5] Cai Python packages..." -ForegroundColor Yellow
 Set-Location $ROOT
