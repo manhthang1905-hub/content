@@ -60,10 +60,40 @@ python -m pip install --upgrade pip --quiet
 Write-Host "  Cai curl-cffi==0.14.0 (pinned - sai version la crash)..."
 pip install "curl-cffi==0.14.0" --quiet
 
-Write-Host "  Cai cac package con lai (co the mat 5-10 phut cho torch)..."
+# torch + openai-whisper = Method 4 (mp3 -> Whisper), PHAO CUOI khi YouTube chan IP.
+# Cai LOUD (khong --quiet) de neu loi mang/dia/RAM thi thay ngay, khong am tham bo qua.
+Write-Host "  Cai torch + openai-whisper (Method 4, co the mat 5-10 phut)..."
+pip install torch openai-whisper
+
+Write-Host "  Cai cac package con lai..."
 pip install -r requirements.txt --quiet
 
 Write-Host "  OK: Tat ca packages da cai" -ForegroundColor Green
+
+# ------ 4b. Kiem tra import that su (bat loi cai am tham) ------------------------------------------
+Write-Host "`n[4b] Kiem tra dependencies (Method 1-4)..." -ForegroundColor Yellow
+$pycheck = @"
+import importlib.util as u
+mods = [
+ ('youtube_transcript_api','Method 1 (sub san co)'),
+ ('yt_dlp','Method 2 (yt-dlp sub)'),
+ ('curl_cffi','Method 2 bypass (impersonate chrome)'),
+ ('whisper','Method 4 (mp3 -> Whisper) = PHAO CUOI'),
+]
+for m,desc in mods:
+    ok = u.find_spec(m) is not None
+    print(('OK   ' if ok else 'THIEU') + ' | ' + m + ' -> ' + desc)
+"@
+$checkOut = $pycheck | python -
+foreach ($line in $checkOut) {
+    if ($line -match '^THIEU') { Write-Host "  $line" -ForegroundColor Red }
+    else { Write-Host "  $line" -ForegroundColor Green }
+}
+if ($checkOut -match 'THIEU.*whisper') {
+    Write-Host "  !! whisper CHUA cai duoc -> Method 4 se khong cuu duoc job khi YouTube chan IP." -ForegroundColor Red
+    Write-Host "     Cach khac: them OPENAI_API_KEY vao api_keys.json (dung Whisper API), hoac chay tay:" -ForegroundColor Yellow
+    Write-Host "       pip install torch openai-whisper" -ForegroundColor Yellow
+}
 
 # ------ 5. Tao folder neu chua co ---------------------------------------------------------------------------------------------------------------------------------------------------
 Write-Host "`n[5/5] Tao folders..." -ForegroundColor Yellow

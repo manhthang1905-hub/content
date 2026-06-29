@@ -831,7 +831,7 @@ def get_transcript(link: str, out_dir: str, force: bool = False, log=print) -> d
     log(f"[fetch] Lấy transcript đối thủ: {link}")
     data = fetch_video_data(link, force=force)
     if not data.get("transcript"):
-        errs = " | ".join(data.get("fetch_errors", [])[:3]) or "không rõ"
+        errs = " | ".join(data.get("fetch_errors", [])) or "không rõ"
         raise RuntimeError(f"Không lấy được transcript từ {link}. Lỗi: {errs}")
     log(
         f"[fetch] OK — {len(data.get('transcript',''))} ký tự "
