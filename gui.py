@@ -18,15 +18,33 @@ from pathlib import Path
 from tkinter import ttk
 
 sys.dont_write_bytecode = True
-# pythonw.exe sets stdout/stderr to None — redirect to devnull so print() in imports doesn't crash
+
+# ── Log file: moi thu tool in ra deu luu (1 file/ngay) de doc chan doan ve sau ──
+from datetime import datetime as _dt  # noqa: E402
+
+_LOG_DIR = Path(__file__).parent / "output" / "logs"
+_LOG_DIR.mkdir(parents=True, exist_ok=True)
+GUI_LOG_PATH = _LOG_DIR / f"gui_{_dt.now():%Y%m%d}.log"
+_gui_log_file = open(GUI_LOG_PATH, "a", encoding="utf-8", buffering=1)
+
+# pythonw.exe: stdout/stderr = None — tro vao log file (truoc la devnull → mat sach log;
+# gio chi tiet fetch/yt-dlp/loi ngam deu nam trong output/logs/gui_*.log)
 if sys.stdout is None:
-    sys.stdout = open(os.devnull, "w")
-if sys.stderr is None:
-    sys.stderr = open(os.devnull, "w")
-if sys.stdout:
+    sys.stdout = _gui_log_file
+else:
     sys.stdout.reconfigure(encoding="utf-8", errors="replace")
-if sys.stderr:
+if sys.stderr is None:
+    sys.stderr = _gui_log_file
+else:
     sys.stderr.reconfigure(encoding="utf-8", errors="replace")
+
+
+def _file_log(msg: str) -> None:
+    """Ghi 1 dong log co timestamp vao file (loi ghi log khong duoc phep giet tool)."""
+    try:
+        _gui_log_file.write(f"[{_dt.now():%H:%M:%S}] {msg}\n")
+    except Exception:
+        pass
 
 ROOT = Path(__file__).parent
 CORE = ROOT / "core"
@@ -903,6 +921,7 @@ class ContentApp(tk.Tk):
             kind = item[0]
             if kind == "log":
                 msg = item[1]
+                _file_log(msg)  # luu file: output/logs/gui_YYYYMMDD.log
                 ts = time.strftime("%H:%M:%S")
                 line = f"[{ts}] {msg}"
                 dest = "system"
@@ -964,6 +983,12 @@ class ContentApp(tk.Tk):
             self.after_cancel(self.cycle_after_id)
         if self.countdown_after_id:
             self.after_cancel(self.countdown_after_id)
+        # Tat tool = tat het claude CLI con (os._exit khong don con, phai kill tay)
+        try:
+            _file_log("=== GUI dong — kill claude CLI con ===")
+            api_mod.kill_active_cli_procs()
+        except Exception:
+            pass
         self.destroy()
         os._exit(0)
 

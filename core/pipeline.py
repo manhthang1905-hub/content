@@ -108,7 +108,12 @@ def _drive_ok(letter: str) -> bool:
         return False
 
 
+_DEAD_DRIVES: set[str] = set()  # drive treo/loi trong phien nay — bo qua, khong thu lai moi job
+
+
 def ensure_drives(cfg: dict, log=print) -> None:
+    """Drive chi la tien ich phu — moi loi/treo o day KHONG duoc phep giet job
+    (tung lam job chet SAU khi viet xong script vi 'net use' treo qua 15s)."""
     drives = cfg.get("network_drives", {})
     if not drives:
         return
@@ -116,20 +121,27 @@ def ensure_drives(cfg: dict, log=print) -> None:
     pwd  = os.environ.get("SMB_PASS", "")
     for letter, path in drives.items():
         drive = f"{letter}:"
-        if _drive_ok(letter):
-            log(f"[drive] {drive} OK")
+        if letter in _DEAD_DRIVES:
             continue
-        log(f"[drive] {drive} mat ket noi — ket noi lai {path}...")
-        subprocess.run(["net", "use", drive, "/delete", "/yes"],
-                       capture_output=True, timeout=10)
-        r = subprocess.run(
-            ["net", "use", drive, path, f"/user:{user}", pwd, "/persistent:yes"],
-            capture_output=True, text=True, timeout=15, errors="replace",
-        )
-        if r.returncode == 0:
-            log(f"[drive] {drive} ket noi lai OK")
-        else:
-            log(f"[drive] {drive} THAT BAI: {(r.stderr or r.stdout).strip()[:200]}")
+        try:
+            if _drive_ok(letter):
+                log(f"[drive] {drive} OK")
+                continue
+            log(f"[drive] {drive} mat ket noi — ket noi lai {path}...")
+            subprocess.run(["net", "use", drive, "/delete", "/yes"],
+                           capture_output=True, timeout=10)
+            r = subprocess.run(
+                ["net", "use", drive, path, f"/user:{user}", pwd, "/persistent:yes"],
+                capture_output=True, text=True, timeout=15, errors="replace",
+            )
+            if r.returncode == 0:
+                log(f"[drive] {drive} ket noi lai OK")
+            else:
+                _DEAD_DRIVES.add(letter)
+                log(f"[drive] {drive} THAT BAI (bo qua den het phien): {(r.stderr or r.stdout).strip()[:200]}")
+        except Exception as exc:  # noqa: BLE001 — treo/timeout: bo qua drive nay
+            _DEAD_DRIVES.add(letter)
+            log(f"[drive] {drive} LOI (bo qua den het phien): {exc}")
 
 
 def copy_to_voice(final_path: str, ma: str, cfg: dict, log=print) -> dict:

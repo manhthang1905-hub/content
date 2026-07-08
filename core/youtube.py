@@ -57,6 +57,14 @@ YOUTUBE_COOKIES = next((p for p in _COOKIES_CANDIDATES if os.path.exists(p)), No
 if YOUTUBE_COOKIES:
     print(f"[cookies] Using {YOUTUBE_COOKIES}", file=sys.stderr)
 
+# Proxy riêng cho YouTube khi IP máy bị chặn endpoint phụ đề (per-machine,
+# đặt trong config/.env). Nhiều proxy cách nhau dấu phẩy, thử theo thứ tự:
+#   YT_PROXY=socks5://127.0.0.1:10001,socks5://127.0.0.1:40000   (4G, WARP)
+# Chỉ áp cho method 1+2 (transcript/subtitle); method 4 tải audio nặng vẫn đi trực tiếp.
+YT_PROXIES = [p.strip() for p in os.environ.get('YT_PROXY', '').split(',') if p.strip()]
+if YT_PROXIES:
+    print(f"[proxy] YouTube transcript qua {' → '.join(YT_PROXIES)}", file=sys.stderr)
+
 # Detect local ffmpeg (check common locations)
 def _find_ffmpeg() -> str:
     candidates = [
@@ -73,6 +81,11 @@ def _find_ffmpeg() -> str:
             r = subprocess.run([c, '-version'], capture_output=True, timeout=3,
                                creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0))
             if r.returncode == 0:
+                if not os.path.isabs(c):
+                    # 'ffmpeg' tren PATH → resolve tuyet doi, vi yt-dlp can
+                    # ffmpeg_location = dirname (dirname('ffmpeg') rong → loi)
+                    import shutil as _shutil
+                    c = _shutil.which(c) or c
                 return c
         except Exception:
             continue
@@ -120,30 +133,46 @@ def log(msg): print(f"  {msg}", file=sys.stderr)
 # Method 1: youtube-transcript-api
 # ─────────────────────────────────────────────
 
-def _make_yt_session():
-    """Tạo requests.Session với cookies nếu có file cookies."""
-    if not YOUTUBE_COOKIES:
+def _make_yt_session(proxy: str = ''):
+    """Tạo requests.Session với cookies và/hoặc proxy nếu cấu hình."""
+    if not YOUTUBE_COOKIES and not proxy:
         return None
     try:
         import requests
-        from http.cookiejar import MozillaCookieJar
         session = requests.Session()
-        jar = MozillaCookieJar(YOUTUBE_COOKIES)
-        jar.load(ignore_discard=True, ignore_expires=True)
-        session.cookies = jar
+        if YOUTUBE_COOKIES:
+            from http.cookiejar import MozillaCookieJar
+            jar = MozillaCookieJar(YOUTUBE_COOKIES)
+            jar.load(ignore_discard=True, ignore_expires=True)
+            session.cookies = jar
+        if proxy:
+            session.proxies = {'http': proxy, 'https': proxy}
         return session
     except Exception as e:
-        log(f"[cookies] Không load được cookies: {e}")
+        log(f"[cookies] Không load được session: {e}")
         return None
 
 
 def method1_transcript_api(video_id: str) -> tuple:
+    """Thử lần lượt: IP máy (khi không có proxy) hoặc từng proxy trong YT_PROXIES."""
+    last_err = None
+    for proxy in (YT_PROXIES or ['']):
+        try:
+            return _method1_once(video_id, proxy)
+        except Exception as e:
+            last_err = e
+            via = proxy or 'IP máy'
+            log(f"  method1 qua {via} lỗi: {type(e).__name__}")
+    raise last_err
+
+
+def _method1_once(video_id: str, proxy: str = '') -> tuple:
     from youtube_transcript_api import YouTubeTranscriptApi
     prefer = ['es', 'es-419', 'es-MX', 'es-US', 'en', 'en-US']
 
     # Try v1.x API first
     try:
-        session = _make_yt_session()
+        session = _make_yt_session(proxy)
         api = YouTubeTranscriptApi(http_client=session) if session else YouTubeTranscriptApi()
         tlist = api.list(video_id)
         fetched = None
@@ -213,15 +242,18 @@ def method2_ytdlp_sub(video_id: str, url: str) -> tuple:
                 opts['impersonate'] = ImpersonateTarget('chrome')
             except Exception:
                 pass
-        for attempt in range(3):
+        attempts = max(3, len(YT_PROXIES))
+        for attempt in range(attempts):
+            if YT_PROXIES:
+                opts['proxy'] = YT_PROXIES[attempt % len(YT_PROXIES)]  # xoay proxy mỗi lượt
             try:
                 with yt_dlp.YoutubeDL(opts) as ydl:
                     ydl.download([url])
                 break
             except Exception as e:
-                if '429' in str(e) and attempt < 2:
+                if '429' in str(e) and attempt < attempts - 1:
                     wait = (attempt + 1) * 8
-                    log(f"429 rate limit — waiting {wait}s (attempt {attempt+1}/3)")
+                    log(f"429 rate limit — waiting {wait}s (attempt {attempt+1}/{attempts})")
                     time.sleep(wait)
                 else:
                     raise
@@ -279,96 +311,87 @@ def method3_browser(video_id: str, url: str) -> tuple:
         time.sleep(4)
 
         # Dismiss consent / cookie banners if present
-        for sel in ['button[aria-label*="Accept"]', 'button[aria-label*="Reject"]',
-                    '#yDmH0d button.VfPpkd-LgbsSe']:
+        # DrissionPage can selector phai co prefix 'css:'; click by_js vi element
+        # co the chua nam trong viewport headless ("no location or size")
+        for sel in ['css:button[aria-label*="Accept"]', 'css:button[aria-label*="Reject"]',
+                    'css:#yDmH0d button.VfPpkd-LgbsSe']:
             try:
                 btn = page.ele(sel, timeout=2)
                 if btn:
-                    btn.click()
+                    btn.click(by_js=True)
                     time.sleep(1)
                     break
             except Exception:
                 pass
 
-        # Click the "More" / "..." button under the video
-        # YouTube uses ytd-button-renderer[button-renderer] for the menu
-        log("Browser: clicking '...' menu...")
-        clicked_menu = False
-        for sel in [
-            'ytd-menu-renderer button[aria-label]',
-            '#info-contents ytd-menu-renderer button',
-            '#top-row ytd-menu-renderer button',
-            'ytd-watch-metadata ytd-menu-renderer button',
-        ]:
-            try:
-                btn = page.ele(sel, timeout=3)
-                if btn:
-                    btn.click()
-                    time.sleep(2)
-                    clicked_menu = True
-                    break
-            except Exception:
-                continue
-
-        if not clicked_menu:
-            raise RuntimeError("Could not find video menu button")
-
-        # Click "Show transcript"
-        log("Browser: clicking 'Show transcript'...")
+        # Layout moi: nut "Show transcript" nam trong phan mo ta video
+        # (ytd-video-description-transcript-section-renderer), khong con trong menu "..."
+        log("Browser: opening transcript from description...")
         clicked_transcript = False
-        for sel in [
-            'yt-formatted-string:contains("transcript")',
-            'yt-formatted-string:contains("Transcript")',
-            'yt-formatted-string:contains("transcripción")',
-            'tp-yt-paper-item:contains("transcript")',
-            'ytd-menu-service-item-renderer:contains("transcript")',
-        ]:
-            try:
-                item = page.ele(sel, timeout=3)
-                if item:
-                    item.click()
-                    time.sleep(3)
-                    clicked_transcript = True
-                    break
-            except Exception:
-                continue
+        try:
+            exp = page.ele('css:#expand', timeout=3)
+            if exp:
+                exp.click(by_js=True)
+                time.sleep(2)
+        except Exception:
+            pass
+        try:
+            btn = page.ele('css:ytd-video-description-transcript-section-renderer button', timeout=5)
+            if btn:
+                btn.click(by_js=True)
+                clicked_transcript = True
+        except Exception:
+            pass
 
         if not clicked_transcript:
-            # Try text search across menu items
+            # Fallback layout cu: menu "..." → "Show transcript"
+            log("Browser: fallback via '...' menu...")
+            for sel in [
+                'css:ytd-watch-metadata ytd-menu-renderer button',
+                'css:ytd-menu-renderer button[aria-label]',
+            ]:
+                try:
+                    btn = page.ele(sel, timeout=3)
+                    if btn:
+                        btn.click(by_js=True)
+                        time.sleep(2)
+                        break
+                except Exception:
+                    continue
             try:
-                items = page.eles('ytd-menu-service-item-renderer')
+                items = page.eles('css:ytd-menu-service-item-renderer')
                 for item in items:
                     text = item.text.lower()
                     if 'transcript' in text or 'transcripci' in text:
-                        item.click()
-                        time.sleep(3)
+                        item.click(by_js=True)
                         clicked_transcript = True
                         break
             except Exception:
                 pass
 
         if not clicked_transcript:
-            raise RuntimeError("Could not find 'Show transcript' menu item")
+            raise RuntimeError("Could not find 'Show transcript' button")
 
-        # Scrape transcript segments
+        # Scrape transcript segments — panel load lazy, poll toi 30s
         log("Browser: scraping transcript...")
-        time.sleep(2)
-
         segments = []
-        for sel in [
-            'ytd-transcript-segment-renderer .segment-text',
-            'ytd-transcript-body-renderer .segment-text',
-            '[class*="transcript"] [class*="segment"]',
-            'ytd-transcript-segment-renderer',
-        ]:
-            try:
-                els = page.eles(sel, timeout=5)
-                if els:
-                    segments = [e.text.strip() for e in els if e.text.strip()]
-                    if segments:
-                        break
-            except Exception:
-                continue
+        for _ in range(15):
+            time.sleep(2)
+            for sel in [
+                'css:ytd-transcript-segment-renderer .segment-text',
+                'css:ytd-transcript-body-renderer .segment-text',
+                'css:ytd-transcript-segment-renderer',
+            ]:
+                try:
+                    els = page.eles(sel, timeout=1)
+                    if els:
+                        segments = [e.text.strip() for e in els if e.text.strip()]
+                        if segments:
+                            break
+                except Exception:
+                    continue
+            if segments:
+                break
 
         if not segments:
             raise RuntimeError("No transcript segments found in browser")
@@ -385,6 +408,36 @@ def method3_browser(video_id: str, url: str) -> tuple:
 
 
 # ─────────────────────────────────────────────
+def _faster_whisper_transcribe(audio_file: str, lang_hint: str) -> str:
+    """Transcribe bằng faster-whisper: GPU (int8_float16) trước, lỗi thì CPU (int8).
+    DLL cuBLAS/cuDNN lấy từ pip wheels nvidia-cublas-cu12 / nvidia-cudnn-cu12."""
+    import site, glob as _glob
+    for _sp in site.getsitepackages():
+        for _d in _glob.glob(os.path.join(_sp, 'nvidia', '*', 'bin')):
+            try:
+                os.add_dll_directory(_d)
+                os.environ['PATH'] = _d + os.pathsep + os.environ['PATH']
+            except Exception:
+                pass
+    from faster_whisper import WhisperModel
+
+    last_err = None
+    for device, compute in (('cuda', 'int8_float16'), ('cpu', 'int8')):
+        try:
+            log(f"  dùng faster-whisper small ({device}/{compute})...")
+            model = WhisperModel('small', device=device, compute_type=compute)
+            segments, _info = model.transcribe(
+                audio_file, language=lang_hint or None, vad_filter=True, beam_size=1)
+            text = clean_text(' '.join(s.text.strip() for s in segments))
+            if not text.strip():
+                raise RuntimeError('faster-whisper trả về text rỗng')
+            return text
+        except Exception as e:
+            last_err = e
+            log(f"  faster-whisper {device} lỗi: {type(e).__name__}: {str(e)[:150]}")
+    raise RuntimeError(f"faster-whisper thất bại cả cuda lẫn cpu: {last_err}")
+
+
 # Method 4: yt-dlp audio + Whisper API (guaranteed fallback)
 # ─────────────────────────────────────────────
 
@@ -430,8 +483,33 @@ def method4_whisper(video_id: str, url: str) -> tuple:
             }
             target_ext = None
 
-        with yt_dlp.YoutubeDL(opts) as ydl:
-            ydl.download([url])
+        # Giong method 2: cookies + node giai n-challenge + Chrome impersonation,
+        # thieu thi tai audio dinh 403 chap chon
+        if YOUTUBE_COOKIES:
+            opts['cookiefile'] = YOUTUBE_COOKIES
+        opts['js_runtimes'] = {'node': {}}
+        opts['remote_components'] = ['ejs:github']
+        try:
+            from yt_dlp.networking.impersonate import ImpersonateTarget
+            opts['impersonate'] = ImpersonateTarget('chrome')
+        except Exception:
+            pass
+
+        last_dl_err = None
+        for attempt in range(3):
+            try:
+                with yt_dlp.YoutubeDL(opts) as ydl:
+                    ydl.download([url])
+                last_dl_err = None
+                break
+            except Exception as e:
+                last_dl_err = e
+                if attempt < 2:
+                    wait = (attempt + 1) * 10
+                    log(f"  audio download lỗi ({str(e)[:80]}) — retry sau {wait}s ({attempt+1}/3)")
+                    time.sleep(wait)
+        if last_dl_err:
+            raise last_dl_err
 
         # Find the downloaded file
         audio_files = glob.glob(os.path.join(tmp_dir, f'{video_id}.*'))
@@ -443,13 +521,6 @@ def method4_whisper(video_id: str, url: str) -> tuple:
         file_size_mb = os.path.getsize(audio_file) / (1024 * 1024)
         log(f"Whisper [A]: tải xong {os.path.basename(audio_file)} ({file_size_mb:.1f} MB)")
 
-        # Whisper API limit: 25MB
-        if file_size_mb > 24.5:
-            raise RuntimeError(
-                f"File audio quá lớn ({file_size_mb:.1f} MB). "
-                "Video dài quá ~25 phút. Cần ffmpeg để nén audio nhỏ hơn."
-            )
-
         # ── Step B: Detect language ──
         lang_hint = 'es'
         if hasattr(method4_whisper, '_last_audio_lang'):
@@ -460,24 +531,25 @@ def method4_whisper(video_id: str, url: str) -> tuple:
         # ── Step C: Transcribe — local whisper preferred (no API key needed) ──
         log(f"Whisper [B]: transcribing ({file_size_mb:.1f} MB, lang={lang_hint})...")
         local_err = None  # giữ lỗi gốc của whisper local để báo ra (không nuốt)
-        with _WHISPER_LOCK:  # serialise — chỉ 1 job dùng Whisper cùng lúc (RAM)
+        with _WHISPER_LOCK:  # serialise — chỉ 1 job dùng Whisper cùng lúc (RAM/VRAM)
             try:
-                import whisper as _whisper
-                log("  dùng local whisper (small model)...")
-                _model = _whisper.load_model("small")
-                _result = _model.transcribe(audio_file, language=lang_hint, fp16=False)
-                text = clean_text(_result["text"])
+                text = _faster_whisper_transcribe(audio_file, lang_hint)
                 word_count = len(text.split())
                 log(f"Whisper [B]: local SUCCESS — {word_count} words")
                 return text, f'{lang_hint} (whisper-local-small)'
             except ImportError as _e:
-                local_err = f"import whisper lỗi: {type(_e).__name__}: {_e}"
+                local_err = f"import faster_whisper lỗi: {type(_e).__name__}: {_e}"
                 log(f"  {local_err} — fallback to API...")
             except Exception as _e:
                 local_err = f"whisper local lỗi: {type(_e).__name__}: {_e}"
                 log(f"  {local_err} — fallback to API...")
 
-        # ── Fallback: OpenAI Whisper API ──
+        # ── Fallback: OpenAI Whisper API (limit 25MB) ──
+        if file_size_mb > 24.5:
+            raise RuntimeError(
+                f"Whisper local thất bại [{local_err}] và file audio quá lớn cho API "
+                f"({file_size_mb:.1f} MB > 25 MB)"
+            )
         api_key = OPENAI_API_KEY
         if not api_key:
             # Lộ lỗi gốc của whisper local thay vì câu chung chung "pip install"

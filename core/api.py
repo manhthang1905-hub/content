@@ -13,6 +13,7 @@ import json
 import os
 import platform
 import re
+import shutil
 import subprocess
 import time
 import threading
@@ -706,8 +707,32 @@ def _strip_ansi(text: str) -> str:
     return re.sub(r'\x1b\[[0-9;]*[mGKHF]', '', text)
 
 
-# Windows: npm cai 'claude.cmd', subprocess can't resolve extension-less name
-_CLAUDE_CMD = "claude.cmd" if platform.system() == "Windows" else "claude"
+# Windows: npm cai 'claude.cmd', ban native cai 'claude.exe' — shutil.which tim ra
+# ban nao co tren PATH; subprocess khong tu resolve ten khong duoi tren Windows.
+_CLAUDE_CMD = (
+    shutil.which("claude") or shutil.which("claude.cmd") or "claude.cmd"
+) if platform.system() == "Windows" else "claude"
+
+# Chay an (khong bat cua so console khi goi tu GUI/pythonw)
+_CREATE_NO_WINDOW = getattr(subprocess, "CREATE_NO_WINDOW", 0)
+
+# Moi claude.exe con dang chay — de kill sach khi tat tool (khong de mo coi dot quota)
+_ACTIVE_CLI_PROCS: set = set()
+
+
+def kill_active_cli_procs() -> None:
+    """Kill moi claude CLI con dang chay. GUI goi trong on_close; atexit goi khi
+    run.py thoat binh thuong."""
+    for p in list(_ACTIVE_CLI_PROCS):
+        try:
+            p.kill()
+        except Exception:
+            pass
+        _ACTIVE_CLI_PROCS.discard(p)
+
+
+import atexit as _atexit  # noqa: E402
+_atexit.register(kill_active_cli_procs)
 
 
 class CliApiClient:
@@ -719,8 +744,10 @@ class CliApiClient:
     """
 
     _MAX_RETRIES = 999999  # retry indefinitely — never break the pipeline
+    # 300s tung lam write timeout voi video dai (transcript ~36k chars → Opus viet >5
+    # phut), retry vo han moi lan lai dot 5 phut + quota. 30 phut du cho moi do dai.
     _RETRY_DELAY = 10   # seconds, tang dan theo attempt (capped at 60s)
-    _TIMEOUT     = 300  # seconds per call
+    _TIMEOUT     = int(os.environ.get("CONTENT_CLI_TIMEOUT", "1800"))  # seconds per call
 
     _QUOTA_MARKERS = ("rate limit", "too many requests", "usage limit", "quota", "overloaded", "529",
                       "session limit")
@@ -772,20 +799,32 @@ class CliApiClient:
                 clean_env = {k: v for k, v in os.environ.items()
                              if k not in ("ANTHROPIC_BASE_URL", "ANTHROPIC_API_KEY",
                                           "ANTHROPIC_AUTH_TOKEN")}
-                proc = subprocess.run(
+                # Popen (khong phai run) de: (1) chay an CREATE_NO_WINDOW,
+                # (2) dang ky vao _ACTIVE_CLI_PROCS cho kill_active_cli_procs()
+                proc = subprocess.Popen(
                     [_CLAUDE_CMD, "--print", "--model", chosen_model],
-                    input=full_prompt,
-                    capture_output=True,
+                    stdin=subprocess.PIPE,
+                    stdout=subprocess.PIPE,
+                    stderr=subprocess.PIPE,
                     text=True,
-                    timeout=self._TIMEOUT,
                     encoding="utf-8",
                     errors="replace",
                     env=clean_env,
+                    creationflags=_CREATE_NO_WINDOW,
                 )
+                _ACTIVE_CLI_PROCS.add(proc)
+                try:
+                    out, err = proc.communicate(input=full_prompt, timeout=self._TIMEOUT)
+                except subprocess.TimeoutExpired:
+                    proc.kill()
+                    proc.communicate()
+                    raise
+                finally:
+                    _ACTIVE_CLI_PROCS.discard(proc)
                 elapsed = time.time() - t0
 
                 if proc.returncode != 0:
-                    detail = (proc.stderr or proc.stdout or "").strip()[:300]
+                    detail = (err or out or "").strip()[:300]
                     last_err = RuntimeError(f"claude exit {proc.returncode}: {detail}")
                     self._log(f"[CLI] {stage} attempt {attempt} failed ({elapsed:.1f}s): exit {proc.returncode}: {detail}")
                     # Neu la quota/rate-limit -> chuyen sang HTTP fallback ngay
@@ -796,7 +835,7 @@ class CliApiClient:
                         return self._fallback.call(stage, system, user_message, max_tokens, model, temperature)
                     # tiep tuc retry
                 else:
-                    text = _strip_ansi(proc.stdout).strip()
+                    text = _strip_ansi(out).strip()
                     if not text:
                         last_err = ValueError("claude CLI returned empty output")
                         self._log(f"[CLI] {stage} attempt {attempt} empty output ({elapsed:.1f}s)")

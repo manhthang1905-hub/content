@@ -9,19 +9,22 @@ PyYAML>=6.0
 gspread>=6.2
 google-auth>=2.47
 google-auth-oauthlib>=1.2
+oauth2client>=4.1
 
-# YouTube transcript (Method 1)
-requests>=2.32
+# YouTube transcript (Method 1) — PySocks de ho tro YT_PROXY (socks5)
+requests[socks]>=2.32
 youtube-transcript-api==1.2.4
 
-# YouTube download (Method 2) — curl-cffi PHẢI đúng version
-yt-dlp>=2026.3.17
-curl-cffi==0.14.0
+# YouTube download (Method 2 + 4)
+yt-dlp>=2026.7.4
+curl-cffi>=0.15          # Chrome impersonation (yt-dlp moi can >=0.15)
+bgutil-ytdlp-pot-provider>=1.3   # PO token cho endpoint phu de (can them: clone
+                                 # https://github.com/Brainicism/bgutil-ytdlp-pot-provider
+                                 # vao ~/bgutil-ytdlp-pot-provider, cd server && npm install && npx tsc)
 
-# Whisper fallback (Method 3)
-openai-whisper
-torch
-numpy
+# Browser scraping (Method 3)
+DrissionPage>=4.1
 
-# GUI
-PyQt5
+# Whisper local (Method 4) — faster-whisper chay CPU ngon, khong can torch
+faster-whisper>=1.2
+# GPU (tuy chon, nhanh ~2x): pip install nvidia-cublas-cu12 nvidia-cudnn-cu12

@@ -22,6 +22,45 @@ _ROOT = os.path.dirname(_HERE)
 sys.path.insert(0, os.path.join(_ROOT, "core"))
 
 
+# ── Tee: mọi thứ in ra console đồng thời lưu output/logs/run_YYYYMMDD.log ────
+class _Tee:
+    """Bọc stdout/stderr: vừa in console vừa ghi file log để chẩn đoán về sau."""
+
+    def __init__(self, *streams):
+        self._streams = streams
+
+    def write(self, s):
+        for st in self._streams:
+            try:
+                st.write(s)
+            except Exception:
+                pass
+
+    def flush(self):
+        for st in self._streams:
+            try:
+                st.flush()
+            except Exception:
+                pass
+
+    def reconfigure(self, **kwargs):  # youtube.py gọi reconfigure lúc import
+        pass
+
+
+def _setup_file_log() -> None:
+    from datetime import datetime
+    log_dir = os.path.join(_ROOT, "output", "logs")
+    os.makedirs(log_dir, exist_ok=True)
+    path = os.path.join(log_dir, f"run_{datetime.now():%Y%m%d}.log")
+    f = open(path, "a", encoding="utf-8", buffering=1)
+    f.write(f"\n=== run.py start {datetime.now():%Y-%m-%d %H:%M:%S} · argv: {' '.join(sys.argv[1:])} ===\n")
+    sys.stdout = _Tee(sys.stdout, f)
+    sys.stderr = _Tee(sys.stderr, f)
+
+
+_setup_file_log()
+
+
 def _load_env() -> None:
     """Nạp .env (KEY=VALUE) vào os.environ trước khi import api."""
     path = os.path.join(_ROOT, "config", ".env")
