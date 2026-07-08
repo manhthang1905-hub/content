@@ -65,6 +65,47 @@ YT_PROXIES = [p.strip() for p in os.environ.get('YT_PROXY', '').split(',') if p.
 if YT_PROXIES:
     print(f"[proxy] YouTube transcript qua {' → '.join(YT_PROXIES)}", file=sys.stderr)
 
+# Không cấu hình YT_PROXY mà bị chặn → TỰ DÒ các proxy quen của dàn máy, cái nào
+# sống thì dùng ngay trong phiên (không lưu cứng nên không bao giờ dính proxy chết):
+# 4G local + gateway (máy chủ 4G 192.168.88.254), 4G qua LAN (các máy khác), WARP local.
+_PROXY_CANDIDATES = [
+    'socks5://127.0.0.1:10001',        # 4G SOCKS local (máy chủ 4G)
+    'socks5://127.0.0.1:5000',         # 4G gateway local
+    'socks5://192.168.88.254:10002',   # 4G relay qua LAN (mọi máy trong dàn)
+    'socks5://192.168.88.254:5000',    # 4G gateway qua LAN
+    'socks5://127.0.0.1:40000',        # Cloudflare WARP proxy mode
+]
+_PROXY_AUTODETECT_TS = 0.0
+
+
+def _autodetect_proxies(reason: str = '') -> bool:
+    """Bị chặn mà chưa có proxy nào chạy được → thử từng ứng viên (test nhẹ bằng
+    robots.txt của YouTube), cái sống thì thêm vào YT_PROXIES của phiên này.
+    Tối đa 1 lần/30 phút (4G/WARP có thể sống lại giữa chừng — tool bật 24/7).
+    Trả về True nếu tìm được ít nhất 1 proxy mới."""
+    global _PROXY_AUTODETECT_TS
+    if time.time() - _PROXY_AUTODETECT_TS < 1800:
+        return False
+    _PROXY_AUTODETECT_TS = time.time()
+    import requests
+    found = []
+    for p in _PROXY_CANDIDATES:
+        if p in YT_PROXIES:
+            continue
+        try:
+            r = requests.get('https://www.youtube.com/robots.txt',
+                             proxies={'http': p, 'https': p}, timeout=8)
+            if r.ok:
+                found.append(p)
+        except Exception:
+            continue
+    if found:
+        YT_PROXIES.extend(found)
+        log(f"[proxy] Tự dò thấy proxy sống ({reason}): {' → '.join(found)}")
+        return True
+    log(f"[proxy] Tự dò không thấy proxy nào sống ({reason}) — dùng browser/whisper")
+    return False
+
 # Detect local ffmpeg (check common locations)
 def _find_ffmpeg() -> str:
     candidates = [
@@ -154,15 +195,25 @@ def _make_yt_session(proxy: str = ''):
 
 
 def method1_transcript_api(video_id: str) -> tuple:
-    """Thử lần lượt: IP máy (khi không có proxy) hoặc từng proxy trong YT_PROXIES."""
+    """Thử lần lượt: IP máy (khi không có proxy) hoặc từng proxy trong YT_PROXIES.
+    Cả dàn thất bại → TỰ DÒ proxy quen của hệ thống rồi thử thêm 1 vòng (tự fix,
+    máy mới không cần cấu hình gì)."""
     last_err = None
-    for proxy in (YT_PROXIES or ['']):
+    tried = list(YT_PROXIES or [''])
+    for proxy in tried:
         try:
             return _method1_once(video_id, proxy)
         except Exception as e:
             last_err = e
             via = proxy or 'IP máy'
             log(f"  method1 qua {via} lỗi: {type(e).__name__}")
+    if _autodetect_proxies('method1 thất bại toàn bộ'):
+        for proxy in [p for p in YT_PROXIES if p not in tried]:
+            try:
+                return _method1_once(video_id, proxy)
+            except Exception as e:
+                last_err = e
+                log(f"  method1 qua {proxy} lỗi: {type(e).__name__}")
     raise last_err
 
 

@@ -8,6 +8,7 @@ import os
 import re
 import shutil
 import subprocess
+import sys
 from datetime import datetime
 
 import yaml
@@ -164,6 +165,55 @@ def copy_to_voice(final_path: str, ma: str, cfg: dict, log=print) -> dict:
             log(f"[voice] copy attempt {attempt}/3 failed: {exc}")
     log(f"[voice] WARNING: copy failed after retries: {last_err}; script vẫn ở {final_path}")
     return {"status": "error", "path": dst, "message": str(last_err)}
+
+
+# ── Tự cài thư viện thiếu (máy khác pull code mới về là chạy được ngay) ──────
+_DEPS_CHECKED = False
+
+
+def ensure_deps(log=print) -> list[str]:
+    """Kiểm tra các gói pipeline transcript cần; thiếu thì pip install -r
+    requirements.txt (ẩn cửa sổ). Trả về danh sách gói đã thiếu ([] = đủ)."""
+    global _DEPS_CHECKED
+    if _DEPS_CHECKED:
+        return []
+    _DEPS_CHECKED = True
+    checks = [
+        ("faster_whisper", "faster-whisper"),
+        ("curl_cffi", "curl-cffi"),
+        ("socks", "requests[socks]"),
+        ("DrissionPage", "DrissionPage"),
+    ]
+    missing = []
+    for mod, pkg in checks:
+        try:
+            __import__(mod)
+        except ImportError:
+            missing.append(pkg)
+    try:
+        from yt_dlp.version import __version__ as _v
+        if tuple(int(x) for x in _v.split(".")[:2]) < (2026, 7):
+            missing.append(f"yt-dlp (đang {_v}, cần >=2026.7)")
+    except Exception:
+        missing.append("yt-dlp")
+    if not missing:
+        return []
+    log(f"[deps] Thiếu/cũ: {', '.join(missing)} — đang pip install -r requirements.txt ...")
+    try:
+        r = subprocess.run(
+            [sys.executable, "-m", "pip", "install", "-r",
+             os.path.join(_ROOT, "requirements.txt")],
+            capture_output=True, text=True, timeout=1800, errors="replace",
+            creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
+        )
+        if r.returncode == 0:
+            log("[deps] Cài xong — transcript đủ đồ chạy")
+        else:
+            log(f"[deps] pip lỗi (tool vẫn chạy, thiếu gói nào method đó tự bỏ qua): "
+                f"{(r.stderr or r.stdout).strip()[:200]}")
+    except Exception as exc:  # noqa: BLE001
+        log(f"[deps] Không cài được ({exc}) — tool vẫn chạy với fallback")
+    return missing
 
 
 # ── Dọn rác định kỳ (vận hành dài ngày, tool bật 24/7 không tắt) ─────────────

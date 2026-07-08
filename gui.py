@@ -365,6 +365,7 @@ class ContentApp(tk.Tk):
         self.build_ui()
         self.after(200, self.pump_logs)
         self.after(300, self.load_jobs)
+        self.after(600, self.run_health_check)
         if AUTO_START_ENABLED:
             self.after(max(0, AUTO_START_DELAY_SEC) * 1000, self.auto_start_once)
 
@@ -437,6 +438,10 @@ class ContentApp(tk.Tk):
         self.sys_btn.pack(side="right")
         self.drives_btn = self.btn(row2, "Drives", self.open_drive_config)
         self.drives_btn.pack(side="right", padx=(0, 8))
+        # Trang thai he thong: YouTube truc tiep/proxy, deps, whisper — cap nhat nen
+        self.health_lbl = tk.Label(row2, text="Đang kiểm tra hệ thống…",
+                                   bg=TH["card"], fg=TH["muted"], font=("Segoe UI", 8))
+        self.health_lbl.pack(side="right", padx=(0, 12))
 
         # ── Row 3: badges + filter ───────────────────────────────
         row3 = tk.Frame(header, bg=TH["bg"])
@@ -851,6 +856,61 @@ class ContentApp(tk.Tk):
         self.status_lbl.config(text="System log" if ma == "system" else f"Đang xem log: {ma}")
         self.render_log()
 
+    def run_health_check(self) -> None:
+        """Chạy nền: tự cài deps thiếu, đo đường YouTube (trực tiếp/proxy/tự dò),
+        kiểm claude CLI + whisper. Kết quả hiện ở health_lbl góc phải."""
+
+        def worker():
+            parts = []
+            try:
+                missing = pipeline.ensure_deps(log=lambda m: self.log_q.put(("log", m)))
+                if missing:
+                    parts.append(f"deps: đã cài {len(missing)} gói")
+            except Exception:
+                parts.append("deps: ?")
+            # Đường YouTube: trực tiếp OK? proxy nào sống?
+            try:
+                import requests
+                import youtube as yt
+                try:
+                    requests.get("https://www.youtube.com/robots.txt", timeout=8)
+                    direct = True
+                except Exception:
+                    direct = False
+                alive = []
+                for p in list(yt.YT_PROXIES):
+                    try:
+                        requests.get("https://www.youtube.com/robots.txt",
+                                     proxies={"http": p, "https": p}, timeout=8)
+                        alive.append(p)
+                    except Exception:
+                        pass
+                if alive:
+                    parts.append(f"YT: proxy {len(alive)}/{len(yt.YT_PROXIES)} sống")
+                elif direct:
+                    parts.append("YT: trực tiếp")
+                else:
+                    # khong duong nao — thu tu do ngay (tu fix, khoi cho den luc fetch)
+                    if yt._autodetect_proxies("health check"):
+                        parts.append(f"YT: tự dò được {len(yt.YT_PROXIES)} proxy")
+                    else:
+                        parts.append("YT: chặn — sẽ dùng browser/whisper")
+            except Exception:
+                parts.append("YT: ?")
+            try:
+                import shutil as _sh
+                parts.append("claude ✓" if (_sh.which("claude") or _sh.which("claude.cmd")) else "claude: CHƯA CÀI")
+            except Exception:
+                pass
+            try:
+                import faster_whisper  # noqa: F401
+                parts.append("whisper ✓")
+            except ImportError:
+                parts.append("whisper: thiếu")
+            self.log_q.put(("health", " · ".join(parts)))
+
+        threading.Thread(target=worker, daemon=True).start()
+
     def auto_start_once(self) -> None:
         if self.auto_running or self.cycle_active:
             return
@@ -882,6 +942,7 @@ class ContentApp(tk.Tk):
         if self.stop_cycle:
             return
         self.log("AUTO sync Sheet để tìm job mới")
+        self.run_health_check()   # do lai duong YouTube/proxy moi chu ky
         self.load_jobs(auto_cycle=True)
 
     def log(self, msg: str) -> None:
@@ -995,6 +1056,9 @@ class ContentApp(tk.Tk):
                         # Sync ngay để lấy job mới; nếu không có job mới thì mới đợi 30 phút
                         self.after(2000, lambda: self.load_jobs(auto_cycle=True))
                     changed = True
+            elif kind == "health":
+                self.health_lbl.config(text=item[1])
+                self.log(f"[health] {item[1]}")
             elif kind == "sync_done":
                 self.sync_btn.config(state="normal")
             elif kind == "check_done":
