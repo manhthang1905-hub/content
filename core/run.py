@@ -131,6 +131,7 @@ def main() -> None:
     args = ap.parse_args()
 
     cfg = load_config()
+    pipeline.cleanup_garbage(log=lambda m: print(m, flush=True))
     # Override config từ CLI flags (dùng cho multi-sheet backfill)
     if args.creds_file:
         cfg["sheet"]["creds_file"] = os.path.join(_ROOT, args.creds_file) if not os.path.isabs(args.creds_file) else args.creds_file

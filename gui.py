@@ -39,9 +39,26 @@ else:
     sys.stderr.reconfigure(encoding="utf-8", errors="replace")
 
 
+_gui_log_date = f"{_dt.now():%Y%m%d}"
+
+
 def _file_log(msg: str) -> None:
-    """Ghi 1 dong log co timestamp vao file (loi ghi log khong duoc phep giet tool)."""
+    """Ghi 1 dong log co timestamp vao file (loi ghi log khong duoc phep giet tool).
+    Tool bat 24/7: qua ngay moi tu xoay sang file gui_<ngaymoi>.log."""
+    global _gui_log_file, _gui_log_date
     try:
+        day = f"{_dt.now():%Y%m%d}"
+        if day != _gui_log_date:
+            new_f = open(_LOG_DIR / f"gui_{day}.log", "a", encoding="utf-8", buffering=1)
+            if sys.stdout is _gui_log_file:
+                sys.stdout = new_f
+            if sys.stderr is _gui_log_file:
+                sys.stderr = new_f
+            try:
+                _gui_log_file.close()
+            except Exception:
+                pass
+            _gui_log_file, _gui_log_date = new_f, day
         _gui_log_file.write(f"[{_dt.now():%H:%M:%S}] {msg}\n")
     except Exception:
         pass
@@ -667,6 +684,8 @@ class ContentApp(tk.Tk):
                 if auto_cycle and self.stop_cycle:
                     break
                 try:
+                    # Don rac toi da 1 lan/ngay — chay o thread nen, khong cham GUI
+                    pipeline.cleanup_garbage(log=lambda m: self.log_q.put(("log", m)))
                     cfg = load_config()
                     jobs = sheets.get_pending(cfg["sheet"], log=lambda m: self.log_q.put(("log", m)))
                     skipped = [j for j in jobs if not pipeline.channel_exists(j.get("channel", ""), cfg)]
@@ -690,7 +709,12 @@ class ContentApp(tk.Tk):
         self.jobs = jobs
         for job in jobs:
             ma = job["ma"]
-            if self.job_status.get(ma) not in ("done", "error", "running"):
+            # Job con tren Sheet (seo trong) = chua xong. Loi cu cho retry o vong sau —
+            # giu "error" vinh vien tung bat phai TAT TOOL MO LAI moi chay tiep duoc.
+            if self.job_status.get(ma) == "error":
+                self.job_status[ma] = "queued"
+                self.log(f"[{ma}] lỗi vòng trước — cho thử lại")
+            if self.job_status.get(ma) not in ("done", "running"):
                 self.job_status[ma] = "queued"
             self.job_logs.setdefault(ma, [])
         self.rebuild_cards()
@@ -863,7 +887,10 @@ class ContentApp(tk.Tk):
     def log(self, msg: str) -> None:
         ts = time.strftime("%H:%M:%S")
         line = f"[{ts}] {msg}"
+        _file_log(msg)  # log he thong (AUTO cycle, sync...) cung vao file
         self.system_logs.append(line)
+        if len(self.system_logs) > 4000:   # chay 24/7: khong de phinh RAM
+            del self.system_logs[:2000]
         if self.selected_log == "system":
             self.append_log(line)
 
@@ -937,6 +964,8 @@ class ContentApp(tk.Tk):
                     if any(mark in msg for mark in ("[title/thumb]", "[sheets]", "Hoàn thành", "Lỗi:")):
                         self.system_logs.append(line)
                     self.update_pipeline_from_log(msg)
+                if len(self.system_logs) > 4000:   # chay 24/7: khong de phinh RAM
+                    del self.system_logs[:2000]
                 if self.selected_log == dest or (dest != "system" and self.selected_log == "system" and line in self.system_logs[-1:]):
                     self.append_log(line)
             elif kind == "jobs":

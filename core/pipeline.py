@@ -166,6 +166,55 @@ def copy_to_voice(final_path: str, ma: str, cfg: dict, log=print) -> dict:
     return {"status": "error", "path": dst, "message": str(last_err)}
 
 
+# ── Dọn rác định kỳ (vận hành dài ngày, tool bật 24/7 không tắt) ─────────────
+_LAST_GC_DAY = ""
+
+
+def cleanup_garbage(log=print, force: bool = False) -> None:
+    """Chạy tối đa 1 lần/ngày (gọi thoải mái, tự bỏ qua nếu hôm nay đã dọn).
+    - output/runs: xóa run cũ >7 ngày (final.txt đã sang voice, Sheet đã ghi)
+    - output/logs: xóa log cũ >30 ngày
+    - %TEMP%/DrissionPage*: profile browser tạm >1 ngày
+    - ~/.claude/projects/*content*: transcript phiên `claude --print` >14 ngày
+      (mỗi call 1 file — 60+ call/ngày, không dọn sẽ phình hàng GB)
+    """
+    global _LAST_GC_DAY
+    import glob
+    import time as _time
+    today = datetime.now().strftime("%Y%m%d")
+    if not force and _LAST_GC_DAY == today:
+        return
+    _LAST_GC_DAY = today
+    now = _time.time()
+
+    def _rm_old(pattern: str, days: float, kind: str) -> None:
+        n = 0
+        for p in glob.glob(pattern):
+            try:
+                if now - os.path.getmtime(p) > days * 86400:
+                    if os.path.isdir(p):
+                        shutil.rmtree(p, ignore_errors=True)
+                    else:
+                        os.remove(p)
+                    n += 1
+            except Exception:
+                pass
+        if n:
+            log(f"[gc] Xóa {n} {kind} cũ")
+
+    _rm_old(os.path.join(RUNS_DIR, "*"), 7, "run")
+    _rm_old(os.path.join(_ROOT, "output", "logs", "*.log"), 30, "log")
+    tmp = os.environ.get("TEMP") or os.environ.get("TMP") or ""
+    if tmp:
+        _rm_old(os.path.join(tmp, "DrissionPage", "*"), 1, "browser profile tạm")
+        _rm_old(os.path.join(tmp, "DrissionPage*"), 1, "browser profile tạm")
+    proj = os.path.join(os.path.expanduser("~"), ".claude", "projects")
+    repo_key = os.path.basename(_ROOT).lower()
+    for d in glob.glob(os.path.join(proj, "*")):
+        if repo_key in os.path.basename(d).lower():
+            _rm_old(os.path.join(d, "*.jsonl"), 14, "claude session")
+
+
 def _parse_frontmatter(text: str) -> tuple[dict, str]:
     if text.startswith("---"):
         parts = text.split("---", 2)
