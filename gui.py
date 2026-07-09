@@ -232,7 +232,7 @@ class SettingsDialog(tk.Toplevel):
         self.app = app
         self.title("Cài đặt máy này")
         self.configure(bg=TH["bg"])
-        self.geometry("660x600")
+        self.geometry("660x700")
         self.resizable(False, False)
         self.transient(app)
         self.grab_set()

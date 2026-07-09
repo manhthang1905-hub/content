@@ -920,9 +920,19 @@ class CliApiClient:
                     is_quota = any(m in detail_lower for m in self._QUOTA_MARKERS)
                     is_auth  = any(m in detail_lower for m in self._AUTH_MARKERS)
                     if use_backup and (is_quota or is_auth):
-                        # Key backup het token/401 → nghi 60', retry NGAY voi key khac
+                        # Key backup het token/401 → nghi 60', retry NGAY voi key khac.
+                        # HET SACH key → cho RETRY_QUOTA_WAIT roi thu lai (khong duoc
+                        # phep continue chay — se lap nong spam gateway 3-5s/lan)
                         _bk_mark_cooldown(backup_key)
                         self._log(f"[CLI] key backup ...{backup_key[-6:]} hết/lỗi — nghỉ 60 phút, đổi key khác")
+                        _now = time.time()
+                        if all(_bk_cooldown.get(k, 0) > _now for k in CLI_BACKUP_KEYS):
+                            self._log(f"[CLI] TẤT CẢ key backup đang nghỉ — chờ {RETRY_QUOTA_WAIT}s rồi thử lại...")
+                            if self.stop_event:
+                                if self.stop_event.wait(RETRY_QUOTA_WAIT):
+                                    raise RuntimeError("Stopped by user")
+                            else:
+                                time.sleep(RETRY_QUOTA_WAIT)
                         continue
                     if not use_backup and is_quota:
                         if CLI_BACKUP_KEYS:
