@@ -126,19 +126,21 @@ def load_config() -> dict:
 
 
 def _get_version() -> str:
-    # version.txt được hook tự đóng dấu mỗi commit, đi theo cả git lẫn ZIP → nguồn chuẩn nhất
-    # (đọc trước git để VM không-git / cập nhật qua ZIP vẫn thấy số đúng)
+    # Máy có git: đếm commit trực tiếp — LUÔN tươi, tự tăng sau mỗi lần Update (git pull),
+    # không phụ thuộc ai nhớ đóng dấu. version.txt (hook đóng dấu mỗi commit) chỉ là
+    # fallback cho VM không-git cập nhật qua ZIP.
     try:
-        v = (ROOT / "version.txt").read_text(encoding="utf-8").strip()
+        import subprocess as _sp
+        r = _sp.run(["git", "rev-list", "--count", "HEAD"],
+                    capture_output=True, text=True, cwd=str(ROOT), timeout=3,
+                    creationflags=getattr(_sp, "CREATE_NO_WINDOW", 0))
+        v = r.stdout.strip()
         if v:
             return v
     except Exception:
         pass
     try:
-        import subprocess as _sp
-        r = _sp.run(["git", "rev-list", "--count", "HEAD"],
-                    capture_output=True, text=True, cwd=str(ROOT), timeout=3)
-        v = r.stdout.strip()
+        v = (ROOT / "version.txt").read_text(encoding="utf-8").strip()
         if v:
             return v
     except Exception:
