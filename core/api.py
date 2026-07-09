@@ -746,11 +746,13 @@ CLI_BACKUP_KEYS = [k.strip() for k in os.environ.get("CLAUDE_BACKUP_KEYS", "").s
 CLI_BACKUP_RETRY_MAX_MIN = int(os.environ.get("CONTENT_CLI_RETRY_MAX_MINUTES", "30"))  # chu ky thu ve Max
 _BK_COOLDOWN_SECS = 3600
 _BK_QUOTA_TTL = 300
+_BK_QUOTA_TTL_DEAD = 60      # cache ngắn hơn cho key hết tiền (check lại sớm)
 
 _bk_lock = threading.Lock()
 _bk_state = {"active": False, "last_max_try": 0.0, "key_i": 0}
 _bk_cooldown: dict = {}      # key -> epoch het cooldown
-_bk_quota_cache: dict = {}   # key -> (alive, epoch check)
+_bk_quota_cache: dict = {}   # key -> (alive, epoch check, remaining_str)
+_bk_log_fn = None             # set boi CliApiClient de log
 
 
 def cli_backup_active() -> bool:
@@ -758,23 +760,80 @@ def cli_backup_active() -> bool:
     return bool(_bk_state["active"] and CLI_BACKUP_KEYS)
 
 
-def _bk_key_has_quota(key: str) -> bool:
-    """Check remaining truoc khi dung (cache 5'). Loi mang → fail-open (True)."""
+def _bk_log(msg: str) -> None:
+    if _bk_log_fn:
+        _bk_log_fn(msg)
+
+
+def _bk_key_has_quota(key: str, force: bool = False) -> bool:
+    """Check remaining truoc khi dung. force=True bo qua cache.
+    Cache 5' cho key song, 60s cho key chet (de check lai som).
+    Loi mang → retry 1 lan, van loi → fail-open (True)."""
     now = time.time()
-    c = _bk_quota_cache.get(key)
-    if c and (now - c[1]) < _BK_QUOTA_TTL:
-        return c[0]
+    if not force:
+        c = _bk_quota_cache.get(key)
+        if c:
+            ttl = _BK_QUOTA_TTL if c[0] else _BK_QUOTA_TTL_DEAD
+            if (now - c[1]) < ttl:
+                return c[0]
     alive = True
-    try:
-        import urllib.request as _u
-        req = _u.Request(CLI_BACKUP_QUOTA_URL, headers={"Authorization": f"Bearer {key}"})
-        with _u.urlopen(req, timeout=8) as r:
-            q = (json.loads(r.read()) or {}).get("quota", {})
-        alive = (not q.get("is_expired")) and int(q.get("remaining", 0) or 0) > 0
-    except Exception:
-        alive = True
-    _bk_quota_cache[key] = (alive, now)
+    remaining_str = "?"
+    for _try in range(2):
+        try:
+            import urllib.request as _u
+            req = _u.Request(CLI_BACKUP_QUOTA_URL, headers={"Authorization": f"Bearer {key}"})
+            with _u.urlopen(req, timeout=8) as r:
+                data = json.loads(r.read()) or {}
+            q = data.get("quota", {})
+            # remaining co the la string/int/float/None
+            raw_remaining = q.get("remaining", 0)
+            try:
+                remaining_val = float(raw_remaining) if raw_remaining is not None else 0
+            except (ValueError, TypeError):
+                remaining_val = 0
+            remaining_str = f"${remaining_val:.2f}"
+            alive = (not q.get("is_expired")) and remaining_val > 0
+            break
+        except Exception:
+            if _try == 0:
+                time.sleep(1)
+                continue
+            alive = True  # fail-open chi sau 2 lan that bai
+            remaining_str = "lỗi mạng (fail-open)"
+    _bk_quota_cache[key] = (alive, now, remaining_str)
     return alive
+
+
+def _bk_check_all_keys(log: bool = True) -> str | None:
+    """Force-check quota TAT CA keys, tra ve key tot nhat (con tien nhieu nhat).
+    Tra None neu tat ca het. Dung khi moi bat backup mode."""
+    best_key = None
+    best_remaining = -999999
+    now = time.time()
+    for key in CLI_BACKUP_KEYS:
+        # Bo qua key dang cooldown
+        if _bk_cooldown.get(key, 0) > now:
+            if log:
+                _bk_log(f"[CLI] key ...{key[-6:]} đang cooldown, bỏ qua")
+            continue
+        # Force check (khong cache)
+        _bk_key_has_quota(key, force=True)
+        c = _bk_quota_cache.get(key)
+        remaining_str = c[2] if c else "?"
+        alive = c[0] if c else False
+        if log:
+            status = "✓ CÒN TIỀN" if alive else "✗ HẾT"
+            _bk_log(f"[CLI] key ...{key[-6:]}: {remaining_str} — {status}")
+        if alive:
+            # Parse remaining de so sanh
+            try:
+                val = float(remaining_str.replace("$", ""))
+            except (ValueError, TypeError):
+                val = 0
+            if val > best_remaining:
+                best_remaining = val
+                best_key = key
+    return best_key
 
 
 def _bk_next_key() -> str:
@@ -783,8 +842,6 @@ def _bk_next_key() -> str:
     keys = CLI_BACKUP_KEYS
     if not keys:
         return ""
-    if len(keys) == 1:
-        return keys[0]
     now = time.time()
     with _bk_lock:
         start = _bk_state["key_i"]
@@ -794,8 +851,14 @@ def _bk_next_key() -> str:
         if _bk_cooldown.get(k, 0) > now:
             continue
         if not _bk_key_has_quota(k):
+            _bk_log(f"[CLI] key ...{k[-6:]} hết quota, thử key tiếp...")
             continue
+        c = _bk_quota_cache.get(k)
+        remaining_str = c[2] if c else "?"
+        _bk_log(f"[CLI] Chọn key ...{k[-6:]} ({remaining_str})")
         return k
+    # Tat ca key deu cooldown/het quota
+    _bk_log(f"[CLI] ⚠ TẤT CẢ {len(keys)} key hết/cooldown — dùng key sắp hết cooldown nhất")
     return min(keys, key=lambda kk: _bk_cooldown.get(kk, 0))
 
 
@@ -835,6 +898,8 @@ class CliApiClient:
         self.stop_event    = stop_event
         self._fallback     = fallback      # ApiClient dung khi CLI het quota
         self._quota_hit    = False         # True = da chuyen sang fallback vinh vien
+        global _bk_log_fn
+        _bk_log_fn = self.log_fn
 
     def _log(self, msg: str) -> None:
         self.log_fn(msg)
@@ -937,11 +1002,17 @@ class CliApiClient:
                     if not use_backup and is_quota:
                         if CLI_BACKUP_KEYS:
                             # Max het token → TU DONG chuyen backup, retry ngay (job khong gay)
+                            self._log(f"[CLI] Max hết token — TỰ CHUYỂN backup ({CLI_BACKUP_BASE_URL}), "
+                                      f"thử lại Max sau mỗi {CLI_BACKUP_RETRY_MAX_MIN} phút")
+                            self._log(f"[CLI] Kiểm tra {len(CLI_BACKUP_KEYS)} key dự phòng...")
+                            best = _bk_check_all_keys(log=True)
                             with _bk_lock:
                                 _bk_state["active"] = True
                                 _bk_state["last_max_try"] = time.time()
-                            self._log(f"[CLI] Max hết token — TỰ CHUYỂN backup ({CLI_BACKUP_BASE_URL}), "
-                                      f"thử lại Max sau mỗi {CLI_BACKUP_RETRY_MAX_MIN} phút")
+                            if best:
+                                self._log(f"[CLI] ✓ Dùng key ...{best[-6:]} — có tiền")
+                            else:
+                                self._log(f"[CLI] ⚠ KHÔNG CÓ key nào còn tiền — sẽ retry fail-open")
                             continue
                         if self._fallback:
                             self._quota_hit = True
