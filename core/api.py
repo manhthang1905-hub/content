@@ -821,7 +821,7 @@ class CliApiClient:
 
     _QUOTA_MARKERS = ("rate limit", "too many requests", "usage limit", "quota", "overloaded", "529",
                       "session limit", "hit your limit")
-    _AUTH_MARKERS  = ("401", "invalid api key", "authentication", "unauthorized")  # key backup chet
+    _AUTH_MARKERS  = ("401", "403", "invalid api key", "authenticate", "unauthorized")  # key backup chet
 
     def __init__(
         self,
