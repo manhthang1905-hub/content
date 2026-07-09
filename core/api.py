@@ -820,7 +820,7 @@ class CliApiClient:
     _TIMEOUT     = int(os.environ.get("CONTENT_CLI_TIMEOUT", "1800"))  # seconds per call
 
     _QUOTA_MARKERS = ("rate limit", "too many requests", "usage limit", "quota", "overloaded", "529",
-                      "session limit")
+                      "session limit", "hit your limit")
     _AUTH_MARKERS  = ("401", "invalid api key", "authentication", "unauthorized")  # key backup chet
 
     def __init__(
