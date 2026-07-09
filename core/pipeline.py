@@ -412,13 +412,22 @@ def check_fix_oneshot(api, cfg, chan, transcript, draft, log) -> str:
 def adapt_oneshot(api, cfg, chan, draft, target_chars, log) -> str:
     # LLM không đếm được ký tự khi viết, lại VƯỢT/HỤT số khai với tỉ lệ dao động. Nên vòng
     # phản hồi: lần đầu khai ĐÚNG target; đo thực tế; THỪA thì giảm số khai, THIẾU thì tăng —
-    # có GIẢM CHẤN để khỏi dao động (full tỉ lệ từng nhảy 17k→5k). Tối đa 3 lượt, mỗi lượt chạy
-    # lại trên BẢN GỐC, cuối cùng giữ bản GẦN target nhất. Không số "đoán" cứng → hợp mọi nguồn.
+    # có GIẢM CHẤN để khỏi dao động (full tỉ lệ từng nhảy 17k→5k). Cuối cùng giữ bản GẦN
+    # target nhất. Không số "đoán" cứng → hợp mọi nguồn.
+    #
+    # Lượt 1-3: nén từ BẢN GỐC (đủ chất liệu, tránh tam sao thất bản).
+    # Lượt 4-5 (chỉ khi 1-3 đều trượt ±25%): đổi chiến thuật — bản tốt nhất đang DÀI hơn
+    # target thì RÚT GỌN từ chính nó (cắt 5k→3k dễ hơn nhiều nén 18k→3k); đang NGẮN hơn
+    # thì thử lại từ bản gốc với số khai đã chỉnh.
     tmpl = load_prompt("adapt.md")
     lo, hi = target_chars * 0.75, target_chars * 1.25        # trong ±25% là đạt, dừng luôn
     aim = target_chars                                        # lần đầu: khai đúng target (1×)
     best, best_gap = draft, abs(count_chars(draft) - target_chars)
-    for attempt in range(1, 4):
+    for attempt in range(1, 6):
+        src = draft
+        if attempt >= 4 and best is not draft and count_chars(best) > hi:
+            src = best                    # cắt tỉa từ bản gần nhất phía TRÊN target
+            aim = target_chars
         resp = api.call(
             stage="check",
             system="You refine viral voiceover scripts. Output the script only — no commentary.",
@@ -426,7 +435,7 @@ def adapt_oneshot(api, cfg, chan, draft, target_chars, log) -> str:
                 "LANGUAGE": chan["language"],
                 "CHANNEL": chan["channel"],
                 "CHARS": aim,
-                "DRAFT": draft,
+                "DRAFT": src,
             }),
             model=cfg["models"]["check"],
             temperature=0.6,
@@ -434,7 +443,8 @@ def adapt_oneshot(api, cfg, chan, draft, target_chars, log) -> str:
         )
         result = clean_voice_text(resp.text, blank_line_between_paragraphs=cfg["output"]["blank_line_between_paragraphs"])
         n = count_chars(result)
-        log(f"[adapt {attempt}] khai {aim:,} → {n:,} ký tự (target {target_chars:,})")
+        log(f"[adapt {attempt}] khai {aim:,}{' (rút từ bản gần nhất)' if src is not draft else ''} "
+            f"→ {n:,} ký tự (target {target_chars:,})")
         if abs(n - target_chars) < best_gap:
             best, best_gap = result, abs(n - target_chars)
         if lo <= n <= hi:
