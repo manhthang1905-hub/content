@@ -999,10 +999,11 @@ class CliApiClient:
                             else:
                                 time.sleep(RETRY_QUOTA_WAIT)
                         continue
-                    if not use_backup and is_quota:
+                    if not use_backup and (is_quota or is_auth):
+                        reason = "Max hết token" if is_quota else "Max lỗi auth (401/session expired)"
                         if CLI_BACKUP_KEYS:
-                            # Max het token → TU DONG chuyen backup, retry ngay (job khong gay)
-                            self._log(f"[CLI] Max hết token — TỰ CHUYỂN backup ({CLI_BACKUP_BASE_URL}), "
+                            # Max het token/auth loi → TU DONG chuyen backup, retry ngay
+                            self._log(f"[CLI] {reason} — TỰ CHUYỂN backup ({CLI_BACKUP_BASE_URL}), "
                                       f"thử lại Max sau mỗi {CLI_BACKUP_RETRY_MAX_MIN} phút")
                             self._log(f"[CLI] Kiểm tra {len(CLI_BACKUP_KEYS)} key dự phòng...")
                             best = _bk_check_all_keys(log=True)
@@ -1016,7 +1017,7 @@ class CliApiClient:
                             continue
                         if self._fallback:
                             self._quota_hit = True
-                            self._log(f"[CLI] Quota/rate-limit — chuyen sang HTTP fallback vinh vien")
+                            self._log(f"[CLI] {reason} — chuyen sang HTTP fallback vinh vien")
                             return self._fallback.call(stage, system, user_message, max_tokens, model, temperature)
                     # tiep tuc retry
                 else:
