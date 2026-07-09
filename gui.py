@@ -276,7 +276,12 @@ class SettingsDialog(tk.Toplevel):
         self.proxy_status = tk.Label(prow, text="", bg=TH["bg"], fg=TH["sub"], font=("Segoe UI", 9))
         self.proxy_status.pack(side="left", padx=(8, 0))
 
-        # 3) Network drives
+        # 3) API key dự phòng (Max hết token tự chuyển sang, hồi thì tự quay về)
+        lbl("API key dự phòng (digishop) — 1 dòng 1 key (TRỐNG = chỉ dùng Max):")
+        self.backup_text = textbox(
+            2, "\n".join(k.strip() for k in os.environ.get("CLAUDE_BACKUP_KEYS", "").split(",") if k.strip()))
+
+        # 4) Network drives
         lbl("Network drives — lệnh net use, 1 dòng 1 ổ (TRỐNG = không dùng drive):")
         self.drive_text = textbox(3, self._current_drive_commands())
 
@@ -367,6 +372,14 @@ class SettingsDialog(tk.Toplevel):
             os.environ.pop("YT_PROXY", None)
         import youtube as _yt
         _yt.YT_PROXIES[:] = proxies
+        # 2b) Key backup → .env + api đang chạy (worker sau dùng ngay)
+        bkeys = [ln.strip() for ln in self.backup_text.get("1.0", "end").splitlines() if ln.strip()]
+        _save_env_key("CLAUDE_BACKUP_KEYS", ",".join(bkeys) if bkeys else None)
+        if bkeys:
+            os.environ["CLAUDE_BACKUP_KEYS"] = ",".join(bkeys)
+        else:
+            os.environ.pop("CLAUDE_BACKUP_KEYS", None)
+        api_mod.CLI_BACKUP_KEYS[:] = bkeys
         # 3) Drives → config.yaml + cfg; xóa hết = tắt drive
         raw = self.drive_text.get("1.0", "end").strip()
         drives, user, pwd = {}, "", ""
@@ -396,8 +409,8 @@ class SettingsDialog(tk.Toplevel):
             pass
         self.app.log_q.put(("log",
             f"[settings] Đã lưu: voice={voice or '(giữ nguyên)'} · proxy={len(proxies)} · "
-            f"drives={sorted(drives.keys()) or 'TẮT'} · luồng={self.app.workers_var.get()} · "
-            f"chu kỳ={AUTO_CYCLE_MINUTES}p"))
+            f"key dự phòng={len(bkeys)} · drives={sorted(drives.keys()) or 'TẮT'} · "
+            f"luồng={self.app.workers_var.get()} · chu kỳ={AUTO_CYCLE_MINUTES}p"))
         self.status_lbl.config(text="Đã lưu & áp dụng ngay (không cần mở lại tool)", fg=TH["green"])
         self.app.run_health_check()
 
@@ -1035,7 +1048,14 @@ class ContentApp(tk.Tk):
                 parts.append("YT: ?")
             try:
                 import shutil as _sh
-                parts.append("claude ✓" if (_sh.which("claude") or _sh.which("claude.cmd")) else "claude: CHƯA CÀI")
+                if not (_sh.which("claude") or _sh.which("claude.cmd")):
+                    parts.append("claude: CHƯA CÀI")
+                elif api_mod.cli_backup_active():
+                    parts.append("claude: BACKUP (credit)")
+                elif api_mod.CLI_BACKUP_KEYS:
+                    parts.append(f"claude: Max (+{len(api_mod.CLI_BACKUP_KEYS)} key dự phòng)")
+                else:
+                    parts.append("claude: Max")
             except Exception:
                 pass
             try:

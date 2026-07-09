@@ -735,6 +735,76 @@ import atexit as _atexit  # noqa: E402
 _atexit.register(kill_active_cli_procs)
 
 
+# ── CLI backup qua gateway (Max het token → TU DONG chuyen, dinh ky thu ve Max) ──
+# Cung claude CLI, chi doi env ANTHROPIC_BASE_URL/KEY khi spawn → tinh tien vao
+# credit gateway thay vi tai khoan Max. Key dat trong config/.env:
+#   CLAUDE_BACKUP_KEYS=sk-xxx,sk-yyy        (nhieu key xoay vong, 401/het → nghi 60')
+#   CLAUDE_BACKUP_BASE_URL=...              (mac dinh vip.digishop.work)
+CLI_BACKUP_BASE_URL = os.environ.get("CLAUDE_BACKUP_BASE_URL", "https://vip.digishop.work").strip()
+CLI_BACKUP_QUOTA_URL = os.environ.get("CLAUDE_BACKUP_QUOTA_URL", "https://token-quota.digishop.work").strip()
+CLI_BACKUP_KEYS = [k.strip() for k in os.environ.get("CLAUDE_BACKUP_KEYS", "").split(",") if k.strip()]
+CLI_BACKUP_RETRY_MAX_MIN = int(os.environ.get("CONTENT_CLI_RETRY_MAX_MINUTES", "30"))  # chu ky thu ve Max
+_BK_COOLDOWN_SECS = 3600
+_BK_QUOTA_TTL = 300
+
+_bk_lock = threading.Lock()
+_bk_state = {"active": False, "last_max_try": 0.0, "key_i": 0}
+_bk_cooldown: dict = {}      # key -> epoch het cooldown
+_bk_quota_cache: dict = {}   # key -> (alive, epoch check)
+
+
+def cli_backup_active() -> bool:
+    """GUI health label doc: True = dang chay bang credit backup."""
+    return bool(_bk_state["active"] and CLI_BACKUP_KEYS)
+
+
+def _bk_key_has_quota(key: str) -> bool:
+    """Check remaining truoc khi dung (cache 5'). Loi mang → fail-open (True)."""
+    now = time.time()
+    c = _bk_quota_cache.get(key)
+    if c and (now - c[1]) < _BK_QUOTA_TTL:
+        return c[0]
+    alive = True
+    try:
+        import urllib.request as _u
+        req = _u.Request(CLI_BACKUP_QUOTA_URL, headers={"Authorization": f"Bearer {key}"})
+        with _u.urlopen(req, timeout=8) as r:
+            q = (json.loads(r.read()) or {}).get("quota", {})
+        alive = (not q.get("is_expired")) and int(q.get("remaining", 0) or 0) > 0
+    except Exception:
+        alive = True
+    _bk_quota_cache[key] = (alive, now)
+    return alive
+
+
+def _bk_next_key() -> str:
+    """Round-robin qua CLI_BACKUP_KEYS, bo key dang cooldown/het quota.
+    Tat ca chet → tra key sap het cooldown nhat (fail-open, van chay duoc)."""
+    keys = CLI_BACKUP_KEYS
+    if not keys:
+        return ""
+    if len(keys) == 1:
+        return keys[0]
+    now = time.time()
+    with _bk_lock:
+        start = _bk_state["key_i"]
+        _bk_state["key_i"] += 1
+    for off in range(len(keys)):
+        k = keys[(start + off) % len(keys)]
+        if _bk_cooldown.get(k, 0) > now:
+            continue
+        if not _bk_key_has_quota(k):
+            continue
+        return k
+    return min(keys, key=lambda kk: _bk_cooldown.get(kk, 0))
+
+
+def _bk_mark_cooldown(key: str) -> None:
+    if key:
+        _bk_cooldown[key] = time.time() + _BK_COOLDOWN_SECS
+        _bk_quota_cache.pop(key, None)
+
+
 class CliApiClient:
     """
     Backend dung claude CLI thay vi HTTP.
@@ -751,6 +821,7 @@ class CliApiClient:
 
     _QUOTA_MARKERS = ("rate limit", "too many requests", "usage limit", "quota", "overloaded", "529",
                       "session limit")
+    _AUTH_MARKERS  = ("401", "invalid api key", "authentication", "unauthorized")  # key backup chet
 
     def __init__(
         self,
@@ -791,14 +862,32 @@ class CliApiClient:
             if self.stop_event and self.stop_event.is_set():
                 raise RuntimeError("Stopped by user")
 
-            self._log(f"[CLI] {stage} -> {chosen_model} (attempt {attempt}/{self._MAX_RETRIES})")
+            # Che do: Max (OAuth) hay backup (gateway)? Dang backup thi cu moi
+            # CLI_BACKUP_RETRY_MAX_MIN phut thu lai Max 1 lan — Max hoi la quay ve.
+            use_backup = False
+            if CLI_BACKUP_KEYS and _bk_state["active"]:
+                if time.time() - _bk_state["last_max_try"] > CLI_BACKUP_RETRY_MAX_MIN * 60:
+                    with _bk_lock:
+                        _bk_state["last_max_try"] = time.time()
+                    self._log(f"[CLI] thử lại Max (chu kỳ {CLI_BACKUP_RETRY_MAX_MIN} phút)...")
+                else:
+                    use_backup = True
+
+            via = "backup" if use_backup else "Max"
+            self._log(f"[CLI] {stage} -> {chosen_model} (attempt {attempt}/{self._MAX_RETRIES}, via {via})")
             t0 = time.time()
+            backup_key = ""
             try:
                 # Loc env: bo ANTHROPIC_* de claude CLI dung OAuth session cua no
                 # (khong ke thua ANTHROPIC_BASE_URL cua routerapi)
                 clean_env = {k: v for k, v in os.environ.items()
                              if k not in ("ANTHROPIC_BASE_URL", "ANTHROPIC_API_KEY",
                                           "ANTHROPIC_AUTH_TOKEN")}
+                if use_backup:
+                    backup_key = _bk_next_key()
+                    clean_env["ANTHROPIC_BASE_URL"] = CLI_BACKUP_BASE_URL
+                    clean_env["ANTHROPIC_AUTH_TOKEN"] = backup_key
+                    clean_env["ANTHROPIC_API_KEY"] = backup_key
                 # Popen (khong phai run) de: (1) chay an CREATE_NO_WINDOW,
                 # (2) dang ky vao _ACTIVE_CLI_PROCS cho kill_active_cli_procs()
                 proc = subprocess.Popen(
@@ -827,12 +916,27 @@ class CliApiClient:
                     detail = (err or out or "").strip()[:300]
                     last_err = RuntimeError(f"claude exit {proc.returncode}: {detail}")
                     self._log(f"[CLI] {stage} attempt {attempt} failed ({elapsed:.1f}s): exit {proc.returncode}: {detail}")
-                    # Neu la quota/rate-limit -> chuyen sang HTTP fallback ngay
                     detail_lower = detail.lower()
-                    if any(m in detail_lower for m in self._QUOTA_MARKERS) and self._fallback:
-                        self._quota_hit = True
-                        self._log(f"[CLI] Quota/rate-limit — chuyen sang HTTP fallback vinh vien")
-                        return self._fallback.call(stage, system, user_message, max_tokens, model, temperature)
+                    is_quota = any(m in detail_lower for m in self._QUOTA_MARKERS)
+                    is_auth  = any(m in detail_lower for m in self._AUTH_MARKERS)
+                    if use_backup and (is_quota or is_auth):
+                        # Key backup het token/401 → nghi 60', retry NGAY voi key khac
+                        _bk_mark_cooldown(backup_key)
+                        self._log(f"[CLI] key backup ...{backup_key[-6:]} hết/lỗi — nghỉ 60 phút, đổi key khác")
+                        continue
+                    if not use_backup and is_quota:
+                        if CLI_BACKUP_KEYS:
+                            # Max het token → TU DONG chuyen backup, retry ngay (job khong gay)
+                            with _bk_lock:
+                                _bk_state["active"] = True
+                                _bk_state["last_max_try"] = time.time()
+                            self._log(f"[CLI] Max hết token — TỰ CHUYỂN backup ({CLI_BACKUP_BASE_URL}), "
+                                      f"thử lại Max sau mỗi {CLI_BACKUP_RETRY_MAX_MIN} phút")
+                            continue
+                        if self._fallback:
+                            self._quota_hit = True
+                            self._log(f"[CLI] Quota/rate-limit — chuyen sang HTTP fallback vinh vien")
+                            return self._fallback.call(stage, system, user_message, max_tokens, model, temperature)
                     # tiep tuc retry
                 else:
                     text = _strip_ansi(out).strip()
@@ -840,7 +944,12 @@ class CliApiClient:
                         last_err = ValueError("claude CLI returned empty output")
                         self._log(f"[CLI] {stage} attempt {attempt} empty output ({elapsed:.1f}s)")
                     else:
-                        self._log(f"[CLI] {stage} OK — {len(text):,} chars, {elapsed:.1f}s")
+                        if not use_backup and _bk_state["active"]:
+                            # Goi Max thanh cong trong luc backup dang bat → Max da hoi
+                            with _bk_lock:
+                                _bk_state["active"] = False
+                            self._log("[CLI] Max đã hồi — quay về chạy bằng Max")
+                        self._log(f"[CLI] {stage} OK — {len(text):,} chars, {elapsed:.1f}s (via {via})")
                         return ApiResponse(text=text, model=chosen_model, stage=stage, elapsed=elapsed)
 
             except FileNotFoundError:
