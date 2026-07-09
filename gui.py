@@ -153,12 +153,37 @@ def _patch_yaml_key(key: str, value: str) -> None:
     path.write_text(text, encoding="utf-8")
 
 
+def _patch_yaml_subkey(key: str, value: str) -> None:
+    """Sửa key con (có thụt lề) trong config.yaml, giữ nguyên comment (vd voice_dir)."""
+    path = ROOT / "config" / "config.yaml"
+    text = path.read_text(encoding="utf-8")
+    text = re.sub(rf'^(\s*{re.escape(key)}:\s*).*$', lambda m: m.group(1) + value,
+                  text, flags=re.MULTILINE)
+    path.write_text(text, encoding="utf-8")
+
+
 def _patch_network_drives(drives: dict) -> None:
     path = ROOT / "config" / "config.yaml"
     text = path.read_text(encoding="utf-8")
-    block = "network_drives:\n" + "\n".join(f"  {k}: '{drives[k]}'" for k in sorted(drives))
-    text = re.sub(r'^network_drives:(?:\n  \w[^\n]*)*', lambda _: block, text, flags=re.MULTILINE)
-    path.write_text(text, encoding="utf-8")
+    if drives:
+        block = "network_drives:\n" + "\n".join(f"  {k}: '{drives[k]}'" for k in sorted(drives))
+    else:
+        block = "network_drives: {}"   # rong = tat han buoc drive
+    new_text, n = re.subn(r'^network_drives:.*(?:\n  \w[^\n]*)*', lambda _: block,
+                          text, flags=re.MULTILINE)
+    if n == 0:  # section bi xoa/comment tu truoc → them vao cuoi file
+        new_text = text.rstrip() + "\n\n" + block + "\n"
+    path.write_text(new_text, encoding="utf-8")
+
+
+def _save_env_key(key: str, value: str | None) -> None:
+    """Upsert 1 key vao config/.env; value=None thi bo key di."""
+    env_path = ROOT / "config" / ".env"
+    text = env_path.read_text(encoding="utf-8") if env_path.exists() else ""
+    text = re.sub(rf'^{re.escape(key)}=.*\n?', '', text, flags=re.MULTILINE)
+    if value is not None:
+        text = text.rstrip() + f"\n{key}={value}\n"
+    env_path.write_text(text, encoding="utf-8")
 
 
 def _save_smb_env(user: str, pwd: str) -> None:
@@ -190,7 +215,11 @@ def list_topics() -> list[str]:
     return sorted(p.name for p in TOPICS.iterdir() if p.is_dir())
 
 
-class DriveConfigDialog(tk.Toplevel):
+class SettingsDialog(tk.Toplevel):
+    """Cài đặt RIÊNG của máy này — lưu vào config/ (không sync GitHub, Update không mất):
+    thư mục voice, proxy YouTube, network drives, luồng mặc định + chu kỳ sync.
+    Lưu xong áp dụng NGAY, không cần khởi động lại tool."""
+
     _NET_USE_RE = re.compile(
         r'net\s+use\s+([A-Za-z]):?\s+(\\\\[^\s]+)\s+/user:(\S+)\s+(\S+)',
         re.IGNORECASE,
@@ -199,38 +228,93 @@ class DriveConfigDialog(tk.Toplevel):
     def __init__(self, app: "ContentApp"):
         super().__init__(app)
         self.app = app
-        self.title("Network Drives")
+        self.title("Cài đặt máy này")
         self.configure(bg=TH["bg"])
-        self.geometry("580x280")
+        self.geometry("660x600")
         self.resizable(False, False)
         self.transient(app)
         self.grab_set()
         self.lift()
         self.focus_force()
 
-        tk.Label(self, text="Net use commands (1 lenh 1 dong):",
-                 bg=TH["bg"], fg=TH["sub"], font=("Segoe UI Semibold", 9)).pack(anchor="w", padx=14, pady=(12, 4))
+        def lbl(text: str, pady=(12, 4)):
+            tk.Label(self, text=text, bg=TH["bg"], fg=TH["sub"],
+                     font=("Segoe UI Semibold", 9)).pack(anchor="w", padx=14, pady=pady)
 
-        self.text = tk.Text(self, height=7, bg=TH["card"], fg=TH["text"],
-                            insertbackground=TH["text"], relief="flat", bd=0,
-                            font=("Consolas", 10), padx=10, pady=8)
-        self.text.pack(fill="x", padx=12)
-        self.text.insert("1.0", self._current_commands())
+        def textbox(height: int, content: str) -> tk.Text:
+            t = tk.Text(self, height=height, bg=TH["card"], fg=TH["text"],
+                        insertbackground=TH["text"], relief="flat", bd=0,
+                        font=("Consolas", 10), padx=10, pady=8)
+            t.pack(fill="x", padx=12)
+            if content:
+                t.insert("1.0", content)
+            return t
+
+        # 1) Thư mục voice
+        lbl("Thư mục lưu kịch bản hoàn thiện (voice):")
+        row = tk.Frame(self, bg=TH["bg"])
+        row.pack(fill="x", padx=12)
+        self.voice_var = tk.StringVar(value=str(app.cfg.get("output", {}).get("voice_dir", "")))
+        tk.Entry(row, textvariable=self.voice_var, bg=TH["card"], fg=TH["text"],
+                 insertbackground=TH["text"], relief="flat", bd=0,
+                 font=("Consolas", 10)).pack(side="left", fill="x", expand=True, ipady=6)
+        tk.Button(row, text="Chọn…", command=self._pick_voice_dir,
+                  bg=TH["overlay"], fg=TH["text"], relief="flat", bd=0,
+                  font=("Segoe UI", 9), padx=10, pady=4, cursor="hand2").pack(side="left", padx=(6, 0))
+
+        # 2) Proxy YouTube
+        lbl("Proxy YouTube — 1 dòng 1 proxy, ưu tiên từ trên xuống (TRỐNG = tự dò 4G/WARP):")
+        self.proxy_text = textbox(
+            3, "\n".join(p.strip() for p in os.environ.get("YT_PROXY", "").split(",") if p.strip()))
+        prow = tk.Frame(self, bg=TH["bg"])
+        prow.pack(fill="x", padx=12, pady=(4, 0))
+        tk.Button(prow, text="Test proxy", command=self._test_proxies,
+                  bg=TH["overlay"], fg=TH["text"], relief="flat", bd=0,
+                  font=("Segoe UI", 9), padx=10, pady=3, cursor="hand2").pack(side="left")
+        self.proxy_status = tk.Label(prow, text="", bg=TH["bg"], fg=TH["sub"], font=("Segoe UI", 9))
+        self.proxy_status.pack(side="left", padx=(8, 0))
+
+        # 3) Network drives
+        lbl("Network drives — lệnh net use, 1 dòng 1 ổ (TRỐNG = không dùng drive):")
+        self.drive_text = textbox(3, self._current_drive_commands())
+
+        # 4) Luồng + chu kỳ
+        lbl("Chạy:")
+        rrow = tk.Frame(self, bg=TH["bg"])
+        rrow.pack(fill="x", padx=12)
+        tk.Label(rrow, text="Luồng mặc định (1-4):", bg=TH["bg"], fg=TH["sub"],
+                 font=("Segoe UI", 9)).pack(side="left")
+        self.workers_var = tk.StringVar(value=os.environ.get("CONTENT_DEFAULT_WORKERS", str(DEFAULT_WORKERS)))
+        tk.Entry(rrow, textvariable=self.workers_var, width=3, bg=TH["card"], fg=TH["text"],
+                 insertbackground=TH["text"], relief="flat", justify="center",
+                 font=("Consolas", 10)).pack(side="left", padx=(4, 16), ipady=3)
+        tk.Label(rrow, text="Chu kỳ sync khi rảnh (phút):", bg=TH["bg"], fg=TH["sub"],
+                 font=("Segoe UI", 9)).pack(side="left")
+        self.cycle_var = tk.StringVar(value=str(AUTO_CYCLE_MINUTES))
+        tk.Entry(rrow, textvariable=self.cycle_var, width=4, bg=TH["card"], fg=TH["text"],
+                 insertbackground=TH["text"], relief="flat", justify="center",
+                 font=("Consolas", 10)).pack(side="left", padx=(4, 0), ipady=3)
 
         self.status_lbl = tk.Label(self, text="", bg=TH["bg"], fg=TH["sub"], font=("Segoe UI", 9))
-        self.status_lbl.pack(anchor="w", padx=14, pady=(6, 0))
+        self.status_lbl.pack(anchor="w", padx=14, pady=(10, 0))
 
         btn_row = tk.Frame(self, bg=TH["bg"])
         btn_row.pack(fill="x", padx=12, pady=10)
-        tk.Button(btn_row, text="Apply & Reconnect", command=self._apply,
+        tk.Button(btn_row, text="Lưu & Áp dụng", command=self._apply,
                   bg=TH["accent"], fg=TH["text"], relief="flat", bd=0,
                   font=("Segoe UI Semibold", 9), padx=12, pady=5, cursor="hand2").pack(side="left")
-        tk.Button(btn_row, text="Cancel", command=self.destroy,
+        tk.Button(btn_row, text="Đóng", command=self.destroy,
                   bg=TH["overlay"], fg=TH["sub"], relief="flat", bd=0,
                   font=("Segoe UI Semibold", 9), padx=12, pady=5, cursor="hand2").pack(side="left", padx=(8, 0))
 
-    def _current_commands(self) -> str:
-        drives = self.app.cfg.get("network_drives", {})
+    def _pick_voice_dir(self) -> None:
+        from tkinter import filedialog
+        d = filedialog.askdirectory(parent=self, initialdir=self.voice_var.get() or "D:\\")
+        if d:
+            self.voice_var.set(os.path.normpath(d))
+
+    def _current_drive_commands(self) -> str:
+        drives = self.app.cfg.get("network_drives") or {}
         user = os.environ.get("SMB_USER", "smbuser")
         pwd  = os.environ.get("SMB_PASS", "")
         return "\n".join(
@@ -238,32 +322,82 @@ class DriveConfigDialog(tk.Toplevel):
             for k in sorted(drives)
         )
 
+    def _proxy_lines(self) -> list[str]:
+        return [ln.strip() for ln in self.proxy_text.get("1.0", "end").splitlines() if ln.strip()]
+
+    def _test_proxies(self) -> None:
+        proxies = self._proxy_lines()
+        if not proxies:
+            self.proxy_status.config(text="(trống — tool sẽ tự dò khi cần)", fg=TH["sub"])
+            return
+        self.proxy_status.config(text="Đang test…", fg=TH["yellow"])
+
+        def worker():
+            import requests
+            results = []
+            for p in proxies:
+                try:
+                    requests.get("https://www.youtube.com/robots.txt",
+                                 proxies={"http": p, "https": p}, timeout=8)
+                    results.append(f"✓ {p}")
+                except Exception:
+                    results.append(f"✗ {p}")
+            ok = sum(1 for r in results if r.startswith("✓"))
+            self.after(0, lambda: self.proxy_status.config(
+                text="  ".join(results)[:90],
+                fg=TH["green"] if ok else TH["red"]))
+
+        threading.Thread(target=worker, daemon=True).start()
+
     def _apply(self) -> None:
-        raw = self.text.get("1.0", "end").strip()
+        global AUTO_CYCLE_MINUTES
+        # 1) Voice dir → config.yaml + cfg đang chạy (job sau dùng ngay)
+        voice = self.voice_var.get().strip()
+        if voice:
+            _patch_yaml_subkey("voice_dir", voice)
+            self.app.cfg.setdefault("output", {})["voice_dir"] = voice
+        # 2) Proxy → .env + youtube.YT_PROXIES đang chạy
+        proxies = self._proxy_lines()
+        _save_env_key("YT_PROXY", ",".join(proxies) if proxies else None)
+        if proxies:
+            os.environ["YT_PROXY"] = ",".join(proxies)
+        else:
+            os.environ.pop("YT_PROXY", None)
+        import youtube as _yt
+        _yt.YT_PROXIES[:] = proxies
+        # 3) Drives → config.yaml + cfg; xóa hết = tắt drive
+        raw = self.drive_text.get("1.0", "end").strip()
         drives, user, pwd = {}, "", ""
         for line in raw.splitlines():
             m = self._NET_USE_RE.search(line.strip())
             if m:
                 drives[m.group(1).upper()] = m.group(2)
                 user, pwd = m.group(3), m.group(4)
-        if not drives:
-            self.status_lbl.config(text="Khong phan tich duoc lenh nao", fg=TH["red"])
-            return
         _patch_network_drives(drives)
-        _save_smb_env(user, pwd)
         self.app.cfg["network_drives"] = drives
-        os.environ["SMB_USER"] = user
-        os.environ["SMB_PASS"] = pwd
-        self.status_lbl.config(text="Da luu — dang ket noi...", fg=TH["yellow"])
-        self.update()
-
-        def do_connect():
-            import pipeline as _pl
-            _pl.ensure_drives(self.app.cfg, log=lambda m: self.app.log_q.put(("log", m)))
-            self.app.log_q.put(("log", f"[drive] Drives da cap nhat: {sorted(drives.keys())}"))
-            self.after(0, lambda: self.status_lbl.config(text="Hoan thanh!", fg=TH["green"]))
-
-        threading.Thread(target=do_connect, daemon=True).start()
+        if user:
+            _save_smb_env(user, pwd)
+            os.environ["SMB_USER"], os.environ["SMB_PASS"] = user, pwd
+        pipeline._DEAD_DRIVES.clear()   # drive mới khai → cho thử lại từ đầu
+        # 4) Luồng + chu kỳ → .env (mặc định lần sau) + áp ngay phiên này
+        try:
+            w = max(1, min(4, int(self.workers_var.get())))
+            _save_env_key("CONTENT_DEFAULT_WORKERS", str(w))
+            self.app.workers_var.set(str(w))
+        except ValueError:
+            pass
+        try:
+            c = max(1, int(self.cycle_var.get()))
+            _save_env_key("CONTENT_AUTO_CYCLE_MINUTES", str(c))
+            AUTO_CYCLE_MINUTES = c
+        except ValueError:
+            pass
+        self.app.log_q.put(("log",
+            f"[settings] Đã lưu: voice={voice or '(giữ nguyên)'} · proxy={len(proxies)} · "
+            f"drives={sorted(drives.keys()) or 'TẮT'} · luồng={self.app.workers_var.get()} · "
+            f"chu kỳ={AUTO_CYCLE_MINUTES}p"))
+        self.status_lbl.config(text="Đã lưu & áp dụng ngay (không cần mở lại tool)", fg=TH["green"])
+        self.app.run_health_check()
 
 
 class RunnerThread(threading.Thread):
@@ -436,7 +570,7 @@ class ContentApp(tk.Tk):
         # Right side of controls bar
         self.sys_btn = self.btn(row2, "System Log", lambda: self.switch_log("system"))
         self.sys_btn.pack(side="right")
-        self.drives_btn = self.btn(row2, "Drives", self.open_drive_config)
+        self.drives_btn = self.btn(row2, "Cài đặt", self.open_settings)
         self.drives_btn.pack(side="right", padx=(0, 8))
         # Trang thai he thong: YouTube truc tiep/proxy, deps, whisper — cap nhat nen
         self.health_lbl = tk.Label(row2, text="Đang kiểm tra hệ thống…",
@@ -640,11 +774,11 @@ class ContentApp(tk.Tk):
         _sp.Popen([exe, str(ROOT / "gui.py")])
         self.destroy()
 
-    def open_drive_config(self) -> None:
+    def open_settings(self) -> None:
         try:
-            DriveConfigDialog(self)
+            SettingsDialog(self)
         except Exception as exc:
-            self.log(f"[Drives] LOI mo dialog: {exc}")
+            self.log(f"[Cài đặt] LOI mo dialog: {exc}")
 
     def change_backend(self) -> None:
         if self.auto_running:
