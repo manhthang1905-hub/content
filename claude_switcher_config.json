@@ -1,0 +1,12 @@
+{
+  "base_url": "https://vip.digishop.work",
+  "quota_url": "https://token-quota.digishop.work",
+  "model": "claude-opus-4-8",
+  "ccs_profile_name": "digiclaude",
+  "auto_restart_vscode": false,
+  "keys": [
+    "sk-V9h4yTreTbrDecN08QTHHYUq88RBnKnGcDA6Y40ATRYBKLMI",
+    "sk-u99N46Zi5e4Zs4r82cTCcekktNILW0JSPKrBCrPilDgE90kh",
+    "sk-5aOr3CtuxQ1CIvs57yQmXILHVVzE0CPUyhJ1RwxkT9VEg342"
+  ]
+}
