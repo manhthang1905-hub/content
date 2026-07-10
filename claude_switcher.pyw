@@ -83,8 +83,12 @@ def get_current_mode() -> dict:
         pass
     return {"mode": "max", "base_url": "", "api_key": "", "key_short": "", "model": ""}
 
+_CLAUDE_CREDENTIALS = os.path.join(os.path.expanduser("~"), ".claude", ".credentials.json")
+_CLAUDE_CREDENTIALS_BACKUP = _CLAUDE_CREDENTIALS + ".max_backup"
+
 def switch_to_max():
-    """Chuyển sang Claude Max — xóa env vars khỏi ~/.claude/settings.json"""
+    """Chuyển sang Claude Max — xóa env vars + khôi phục credentials"""
+    # Xóa env vars khỏi settings.json
     try:
         with open(_CLAUDE_SETTINGS, "r", encoding="utf-8") as f:
             data = json.load(f)
@@ -96,9 +100,18 @@ def switch_to_max():
             json.dump(data, f, indent=2, ensure_ascii=False)
     except (FileNotFoundError, json.JSONDecodeError):
         pass
+    # Khôi phục credentials.json từ backup (nếu có)
+    if os.path.isfile(_CLAUDE_CREDENTIALS_BACKUP) and not os.path.isfile(_CLAUDE_CREDENTIALS):
+        os.rename(_CLAUDE_CREDENTIALS_BACKUP, _CLAUDE_CREDENTIALS)
 
 def switch_to_digi(api_key: str):
-    """Chuyển sang Digi Gateway — ghi CCS profile rồi persist"""
+    """Chuyển sang Digi Gateway — ẩn credentials + ghi CCS profile + persist"""
+    # Ẩn credentials.json (tránh extension check OAuth expired → bắt đăng nhập)
+    if os.path.isfile(_CLAUDE_CREDENTIALS):
+        try:
+            os.rename(_CLAUDE_CREDENTIALS, _CLAUDE_CREDENTIALS_BACKUP)
+        except OSError:
+            pass
     model = CONFIG["model"]
     base_url = CONFIG["base_url"]
     profile_name = CONFIG["ccs_profile_name"]
