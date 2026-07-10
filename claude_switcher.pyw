@@ -92,24 +92,33 @@ def delete_user_env(name: str):
         pass
 
 # ── Mode detection ────────────────────────────────────────────────────────────
+# Claude Code extension đọc: ANTHROPIC_BASE_URL, ANTHROPIC_AUTH_TOKEN, ANTHROPIC_MODEL
+# (ANTHROPIC_API_KEY cũng set để tương thích HTTP API)
+_ENV_VARS = ("ANTHROPIC_BASE_URL", "ANTHROPIC_API_KEY", "ANTHROPIC_AUTH_TOKEN", "ANTHROPIC_MODEL")
+
 def get_current_mode() -> dict:
     """Detect chế độ hiện tại từ User Env"""
     base_url = get_user_env("ANTHROPIC_BASE_URL")
+    auth_token = get_user_env("ANTHROPIC_AUTH_TOKEN")
     api_key = get_user_env("ANTHROPIC_API_KEY")
+    key = auth_token or api_key
     if base_url and "digishop" in base_url:
-        short = f"...{api_key[-6:]}" if api_key and len(api_key) > 6 else "N/A"
-        return {"mode": "digi", "base_url": base_url, "api_key": api_key, "key_short": short}
-    return {"mode": "max", "base_url": base_url, "api_key": api_key, "key_short": ""}
+        short = f"...{key[-6:]}" if key and len(key) > 6 else "N/A"
+        model = get_user_env("ANTHROPIC_MODEL") or "default"
+        return {"mode": "digi", "base_url": base_url, "api_key": key, "key_short": short, "model": model}
+    return {"mode": "max", "base_url": base_url, "api_key": key, "key_short": "", "model": ""}
 
 def switch_to_max():
-    """Chuyển sang Claude Max — xóa env vars"""
-    delete_user_env("ANTHROPIC_BASE_URL")
-    delete_user_env("ANTHROPIC_API_KEY")
+    """Chuyển sang Claude Max — xóa tất cả env vars Anthropic"""
+    for var in _ENV_VARS:
+        delete_user_env(var)
 
-def switch_to_digi(api_key: str):
-    """Chuyển sang Digi Gateway — set env vars"""
+def switch_to_digi(api_key: str, model: str = "claude-opus-4-8"):
+    """Chuyển sang Digi Gateway — set env vars cho Claude Code extension"""
     set_user_env("ANTHROPIC_BASE_URL", DIGI_VIP_URL)
     set_user_env("ANTHROPIC_API_KEY", api_key)
+    set_user_env("ANTHROPIC_AUTH_TOKEN", api_key)
+    set_user_env("ANTHROPIC_MODEL", model)
 
 # ── Quota check ───────────────────────────────────────────────────────────────
 def check_key_quota(key: str) -> dict:
@@ -305,7 +314,7 @@ class ClaudeSwitcher(tk.Tk):
         else:
             self._mode_icon.config(text="🌐", fg=ACCENT_PURPLE)
             self._mode_label.config(text=f"Digi Gateway", fg=ACCENT_PURPLE)
-            self._mode_detail.config(text=f"Key {info['key_short']} · {info['base_url']}")
+            self._mode_detail.config(text=f"Key {info['key_short']} · {info.get('model', '')} · {info['base_url']}")
             self._mode_card.config(highlightbackground=ACCENT_PURPLE)
             self._btn_max.config(bg=ACCENT_BLUE, state="normal")
             self._btn_digi.config(bg="#3b2069", state="disabled")
