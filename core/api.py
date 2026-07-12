@@ -862,9 +862,9 @@ def _bk_next_key() -> str:
     return min(keys, key=lambda kk: _bk_cooldown.get(kk, 0))
 
 
-def _bk_mark_cooldown(key: str) -> None:
+def _bk_mark_cooldown(key: str, duration: int | None = None) -> None:
     if key:
-        _bk_cooldown[key] = time.time() + _BK_COOLDOWN_SECS
+        _bk_cooldown[key] = time.time() + (duration or _BK_COOLDOWN_SECS)
         _bk_quota_cache.pop(key, None)
 
 
@@ -885,6 +885,8 @@ class CliApiClient:
     _QUOTA_MARKERS = ("rate limit", "too many requests", "usage limit", "quota", "overloaded", "529",
                       "session limit", "hit your limit")
     _AUTH_MARKERS  = ("401", "403", "invalid api key", "authenticate", "unauthorized")  # key backup chet
+    _CONN_MARKERS  = ("connectionrefused", "unable to connect", "connection refused",
+                      "connect to api", "network error", "timed out")  # Max/gateway unreachable
 
     def __init__(
         self,
@@ -984,6 +986,7 @@ class CliApiClient:
                     detail_lower = detail.lower()
                     is_quota = any(m in detail_lower for m in self._QUOTA_MARKERS)
                     is_auth  = any(m in detail_lower for m in self._AUTH_MARKERS)
+                    is_conn  = any(m in detail_lower for m in self._CONN_MARKERS)
                     if use_backup and (is_quota or is_auth):
                         # Key backup het token/401 → nghi 60', retry NGAY voi key khac.
                         # HET SACH key → cho RETRY_QUOTA_WAIT roi thu lai (khong duoc
@@ -999,8 +1002,13 @@ class CliApiClient:
                             else:
                                 time.sleep(RETRY_QUOTA_WAIT)
                         continue
-                    if not use_backup and (is_quota or is_auth):
-                        reason = "Max hết token" if is_quota else "Max lỗi auth (401/session expired)"
+                    if use_backup and is_conn:
+                        # Backup gateway unreachable → cooldown ngắn 5 phút, thử key khác
+                        _bk_mark_cooldown(backup_key, duration=300)
+                        self._log(f"[CLI] key backup ...{backup_key[-6:]} gateway lỗi kết nối — đổi key khác")
+                        continue
+                    if not use_backup and (is_quota or is_auth or is_conn):
+                        reason = "Max hết token" if is_quota else ("Max lỗi kết nối (ConnectionRefused)" if is_conn else "Max lỗi auth (401/session expired)")
                         if CLI_BACKUP_KEYS:
                             # Max het token/auth loi → TU DONG chuyen backup, retry ngay
                             self._log(f"[CLI] {reason} — TỰ CHUYỂN backup ({CLI_BACKUP_BASE_URL}), "
