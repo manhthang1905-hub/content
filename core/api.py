@@ -958,7 +958,7 @@ class CliApiClient:
                 # Popen (khong phai run) de: (1) chay an CREATE_NO_WINDOW,
                 # (2) dang ky vao _ACTIVE_CLI_PROCS cho kill_active_cli_procs()
                 proc = subprocess.Popen(
-                    [_CLAUDE_CMD, "--print", "--model", chosen_model],
+                    [_CLAUDE_CMD, "--bare", "--print", "--model", chosen_model],
                     stdin=subprocess.PIPE,
                     stdout=subprocess.PIPE,
                     stderr=subprocess.PIPE,
