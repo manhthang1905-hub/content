@@ -87,20 +87,24 @@ _CLAUDE_CREDENTIALS = os.path.join(os.path.expanduser("~"), ".claude", ".credent
 _CLAUDE_CREDENTIALS_BACKUP = _CLAUDE_CREDENTIALS + ".max_backup"
 
 def switch_to_max():
-    """Chuyển sang Claude Max — xóa env vars + khôi phục credentials"""
-    # Xóa env vars khỏi settings.json
+    """Chuyển sang Claude Max — xóa env vars EVERYWHERE + khôi phục credentials"""
+    _ANTHROPIC_KEYS = ("ANTHROPIC_BASE_URL", "ANTHROPIC_API_KEY", "ANTHROPIC_AUTH_TOKEN", "ANTHROPIC_MODEL")
+    # 1. Xóa env vars khỏi settings.json
     try:
         with open(_CLAUDE_SETTINGS, "r", encoding="utf-8") as f:
             data = json.load(f)
         env = data.get("env", {})
-        for k in ("ANTHROPIC_BASE_URL", "ANTHROPIC_API_KEY", "ANTHROPIC_AUTH_TOKEN", "ANTHROPIC_MODEL"):
+        for k in _ANTHROPIC_KEYS:
             env.pop(k, None)
         data["env"] = env
         with open(_CLAUDE_SETTINGS, "w", encoding="utf-8") as f:
             json.dump(data, f, indent=2, ensure_ascii=False)
     except (FileNotFoundError, json.JSONDecodeError):
         pass
-    # Khôi phục credentials.json từ backup (nếu có)
+    # 2. Xóa env vars khỏi Windows Registry (User Environment Variables)
+    for k in _ANTHROPIC_KEYS:
+        delete_user_env(k)
+    # 3. Khôi phục credentials.json từ backup (nếu có)
     if os.path.isfile(_CLAUDE_CREDENTIALS_BACKUP) and not os.path.isfile(_CLAUDE_CREDENTIALS):
         os.rename(_CLAUDE_CREDENTIALS_BACKUP, _CLAUDE_CREDENTIALS)
 
