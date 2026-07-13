@@ -884,7 +884,8 @@ class CliApiClient:
 
     _QUOTA_MARKERS = ("rate limit", "too many requests", "usage limit", "quota", "overloaded", "529",
                       "session limit", "hit your limit")
-    _AUTH_MARKERS  = ("401", "403", "invalid api key", "authenticate", "unauthorized")  # key backup chet
+    _AUTH_MARKERS  = ("401", "403", "invalid api key", "authenticate", "unauthorized",
+                      "not logged in", "please run /login")  # key backup chet / Max out session
     _CONN_MARKERS  = ("connectionrefused", "unable to connect", "connection refused",
                       "connect to api", "network error", "timed out")  # Max/gateway unreachable
 
@@ -955,10 +956,16 @@ class CliApiClient:
                     clean_env["ANTHROPIC_BASE_URL"] = CLI_BACKUP_BASE_URL
                     clean_env["ANTHROPIC_AUTH_TOKEN"] = backup_key
                     clean_env["ANTHROPIC_API_KEY"] = backup_key
+                # --bare CHI cho backup: chan cache/settings dinh URL Digi, auth bang env
+                # key. Max KHONG duoc --bare — bare tat OAuth ("auth is strictly
+                # ANTHROPIC_API_KEY") → CLI bao "Not logged in" du dang dang nhap Max.
+                cli_args = [_CLAUDE_CMD, "--print", "--model", chosen_model]
+                if use_backup:
+                    cli_args.insert(1, "--bare")
                 # Popen (khong phai run) de: (1) chay an CREATE_NO_WINDOW,
                 # (2) dang ky vao _ACTIVE_CLI_PROCS cho kill_active_cli_procs()
                 proc = subprocess.Popen(
-                    [_CLAUDE_CMD, "--bare", "--print", "--model", chosen_model],
+                    cli_args,
                     stdin=subprocess.PIPE,
                     stdout=subprocess.PIPE,
                     stderr=subprocess.PIPE,
