@@ -15,7 +15,7 @@ Create a new TITLE + THUMBNAIL TEXT for this channel, in <<LANGUAGE>>.
 ## Rules
 - TITLE: in <<LANGUAGE>>, compelling, keeps the promise; **max 100 characters**.
 - THUMB TEXT: high-impact short phrase (max ~8 words) — the most shocking or curiosity-triggering part. <<CASING>>
-- Localize for that country's audience — not a literal translation.
+- Localize for that country's audience — not a literal translation. Money, prices, institutions, and everyday situations must be the ones this audience actually lives with — never the source country's.
 
 ## Return EXACTLY 2 lines (nothing else)
 TITLE: <title>
