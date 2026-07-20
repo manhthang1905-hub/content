@@ -735,9 +735,25 @@ class ContentApp(tk.Tk):
                 # Luôn trả lại thay đổi local (active_topic của máy này), kể cả khi pull lỗi
                 _sp.run(["git", "stash", "pop"], capture_output=True, text=True,
                         cwd=str(ROOT), timeout=30)
-            # Pull lỗi (vd repo không phải git, conflict) -> raise để rơi sang ZIP
             if r.returncode != 0:
-                raise RuntimeError("git pull that bai: " + out[:200])
+                # Pull kẹt — trên VM từng kẹt VĨNH VIỄN: ZIP chép file mới về thành
+                # untracked, pull sau đó từ chối merge ("would be overwritten"), version
+                # đứng yên mãi. Ép hội tụ: fetch + reset --hard về origin/main (ghi đè
+                # mọi file tracked lẫn untracked-trùng-tên; creds/.env/output là
+                # gitignore nên không bị đụng). Giữ lại config.yaml của máy.
+                self.log_q.put(("log", f"[Update] git pull loi ({out[:120]}) — ep dong bo ve origin/main..."))
+                cfg_path = ROOT / "config" / "config.yaml"
+                cfg_bak = cfg_path.read_text(encoding="utf-8")
+                f = _sp.run(["git", "fetch", "origin", "main"], capture_output=True,
+                            text=True, cwd=str(ROOT), timeout=60)
+                if f.returncode != 0:
+                    raise RuntimeError("git fetch that bai: " + (f.stderr or f.stdout).strip()[:200])
+                r2 = _sp.run(["git", "reset", "--hard", "FETCH_HEAD"], capture_output=True,
+                             text=True, cwd=str(ROOT), timeout=30)
+                cfg_path.write_text(cfg_bak, encoding="utf-8")
+                if r2.returncode != 0:
+                    raise RuntimeError("git reset that bai: " + (r2.stderr or r2.stdout).strip()[:200])
+                out = "Xong (dong bo cung ve origin/main)."
             for cache in ROOT.rglob("__pycache__"):
                 _sh.rmtree(cache, ignore_errors=True)
             return out
@@ -745,7 +761,7 @@ class ContentApp(tk.Tk):
         def _via_zip() -> str:
             import shutil, tempfile, urllib.request, zipfile
             url = "https://github.com/manhthang1905-hub/content/archive/refs/heads/main.zip"
-            self.log_q.put(("log", "[Update] Git khong co — tai ZIP tu GitHub..."))
+            self.log_q.put(("log", "[Update] Tai ZIP tu GitHub..."))
             with tempfile.TemporaryDirectory() as tmp:
                 zip_path = os.path.join(tmp, "update.zip")
                 urllib.request.urlretrieve(url, zip_path)
@@ -772,7 +788,8 @@ class ContentApp(tk.Tk):
             try:
                 try:
                     out = _via_git()
-                except Exception:
+                except Exception as ge:
+                    self.log_q.put(("log", f"[Update] git khong dung duoc ({str(ge)[:150]}) — chuyen sang ZIP"))
                     out = _via_zip()
                 self.log_q.put(("log", f"[Update] {out[:300]}"))
                 self.after(0, self._restart)
